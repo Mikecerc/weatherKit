@@ -4,6 +4,7 @@
 #include "display.h"
 #include "weather_calc.h"
 #include "storm_tracker.h"
+#include "lora.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -264,24 +265,45 @@ void ui_draw_storm_tracker(void)
  */
 void ui_draw_sensor_status(void)
 {
+    char buf[22];
     const weather_data_t *weather = ui_get_cached_weather();
+    lora_status_t lora_status;
+    lora_get_status(&lora_status);
     
     // Title
     ui_draw_string(22, 2, "Sensor Status");
     ui_draw_hline(0, 12, 128);
     
     // Remote sensor status
-    ui_draw_string(4, 20, "Remote:");
+    ui_draw_string(4, 16, "Remote:");
     if (weather->sensor_connected) {
-        ui_draw_string(52, 20, "Connected");
+        ui_draw_string(52, 16, "Connected");
     } else {
-        ui_draw_string(52, 20, "N/A");
+        ui_draw_string(52, 16, "N/A");
     }
     
-    // Placeholder for future LoRa info
-    ui_draw_string(4, 32, "LoRa: N/A");
-    
-    ui_draw_string(4, 44, "(signal,batt TBD)");
+    // LoRa status
+    if (lora_status.initialized) {
+        const char *pwr = lora_status.high_power ? "Hi" : "Lo";
+        snprintf(buf, sizeof(buf), "LoRa: OK (%s)", pwr);
+        ui_draw_string(4, 26, buf);
+        
+        // RSSI/SNR from last packet
+        if (lora_status.packets_received > 0) {
+            snprintf(buf, sizeof(buf), "RSSI:%ddBm SNR:%.0f", 
+                     lora_status.last_rssi, lora_status.last_snr);
+            ui_draw_string(4, 36, buf);
+        } else {
+            ui_draw_string(4, 36, "No packets yet");
+        }
+        
+        // Packet counts
+        snprintf(buf, sizeof(buf), "TX:%lu RX:%lu", 
+                 lora_status.packets_sent, lora_status.packets_received);
+        ui_draw_string(4, 46, buf);
+    } else {
+        ui_draw_string(4, 26, "LoRa: Not init");
+    }
     
     ui_draw_page_indicator();
 }
@@ -296,47 +318,61 @@ void ui_draw_settings_page(void)
     bool edit_mode = ui_is_settings_edit();
     settings_item_t cursor = ui_get_settings_cursor();
     
-    // Title
-    ui_draw_string(37, 2, "Settings");
-    ui_draw_hline(0, 12, 128);
+    // Title - compact header
+    ui_draw_string(37, 0, "Settings");
+    ui_draw_hline(0, 9, 128);
     
+    // 6 menu items with scrolling window of 4 visible
+    // Settings: Brightness, Units, Refresh, Locate, HighPwr, About
+    // Calculate which items to show based on cursor position
+    int first_visible = 0;
+    if (cursor >= 4) {
+        first_visible = cursor - 3;  // Keep cursor visible at bottom
+    }
+    
+    // Menu items with 9px spacing: y positions 12, 21, 30, 39
+    for (int i = 0; i < 4; i++) {
+        int item_idx = first_visible + i;
+        int y = 12 + (i * 9);
+        
+        const char *prefix = (edit_mode && item_idx == cursor) ? ">" : " ";
+        
+        switch (item_idx) {
+            case SETTINGS_BRIGHTNESS:
+                snprintf(buf, sizeof(buf), "%sBright: %d%%", prefix, settings->brightness);
+                break;
+            case SETTINGS_UNITS: {
+                const char *unit_str = (settings->units == UNITS_METRIC) ? "Metric" : "Imperial";
+                snprintf(buf, sizeof(buf), "%sUnits: %s", prefix, unit_str);
+                break;
+            }
+            case SETTINGS_REFRESH_RATE:
+                snprintf(buf, sizeof(buf), "%sRefresh: %ds", prefix, settings->refresh_rate);
+                break;
+            case SETTINGS_LOCATE: {
+                const char *loc_str = settings->locate_enabled ? "ON" : "Off";
+                snprintf(buf, sizeof(buf), "%sLocate: %s", prefix, loc_str);
+                break;
+            }
+            case SETTINGS_HIGH_POWER: {
+                const char *pwr_str = settings->sensor_high_power ? "HIGH" : "Low";
+                snprintf(buf, sizeof(buf), "%sHighPwr: %s", prefix, pwr_str);
+                break;
+            }
+            case SETTINGS_ABOUT:
+                snprintf(buf, sizeof(buf), "%sAbout", prefix);
+                break;
+            default:
+                continue;
+        }
+        ui_draw_string(4, y, buf);
+    }
+    
+    // Tooltip above page indicator (y=50)
     if (edit_mode) {
-        // In edit mode: show cursor on current item
-        const char *cursor1 = (cursor == SETTINGS_BRIGHTNESS) ? ">" : " ";
-        snprintf(buf, sizeof(buf), "%sBright: %d%%", cursor1, settings->brightness);
-        ui_draw_string(4, 16, buf);
-        
-        const char *cursor2 = (cursor == SETTINGS_UNITS) ? ">" : " ";
-        const char *unit_str = (settings->units == UNITS_METRIC) ? "Metric" : "Imper.";
-        snprintf(buf, sizeof(buf), "%sUnits: %s", cursor2, unit_str);
-        ui_draw_string(4, 26, buf);
-        
-        const char *cursor3 = (cursor == SETTINGS_LORA_TX) ? ">" : " ";
-        const char *pwr_str = settings->lora_high_power ? "HIGH" : "Low";
-        snprintf(buf, sizeof(buf), "%sLoRa Pwr: %s", cursor3, pwr_str);
-        ui_draw_string(4, 36, buf);
-        
-        const char *cursor4 = (cursor == SETTINGS_ABOUT) ? ">" : " ";
-        snprintf(buf, sizeof(buf), "%sAbout", cursor4);
-        ui_draw_string(4, 46, buf);
-        
-        ui_draw_string(4, 57, "L:next R:set hR:done");
+        ui_draw_string(4, 50, "L:next R:set hR:exit");
     } else {
-        // Not in edit mode: no cursor, just show values
-        snprintf(buf, sizeof(buf), "  Bright: %d%%", settings->brightness);
-        ui_draw_string(4, 16, buf);
-        
-        const char *unit_str = (settings->units == UNITS_METRIC) ? "Metric" : "Imper.";
-        snprintf(buf, sizeof(buf), "  Units: %s", unit_str);
-        ui_draw_string(4, 26, buf);
-        
-        const char *pwr_str = settings->lora_high_power ? "HIGH" : "Low";
-        snprintf(buf, sizeof(buf), "  LoRa Pwr: %s", pwr_str);
-        ui_draw_string(4, 36, buf);
-        
-        ui_draw_string(4, 46, "  About");
-        
-        ui_draw_string(4, 57, "R:edit  hR:back");
+        ui_draw_string(4, 50, "R:edit hR:back      ");
     }
     
     ui_draw_page_indicator();
@@ -354,4 +390,20 @@ void ui_draw_about(void)
     ui_draw_string(4, 28, "ESP32-S3 Weather");
     ui_draw_string(4, 38, "Station");
     ui_draw_string(4, 50, "Hold R to go back");
+}
+
+/**
+ * @brief Draw LoRa high power confirmation dialog
+ */
+void ui_draw_lora_confirm(void)
+{
+    ui_draw_string(28, 2, "!! WARNING !!");
+    ui_draw_hline(0, 12, 128);
+    
+    ui_draw_string(4, 16, "High power TX can");
+    ui_draw_string(4, 26, "DAMAGE the radio");
+    ui_draw_string(4, 36, "without an antenna!");
+    
+    ui_draw_hline(0, 48, 128);
+    ui_draw_string(4, 52, "R:Enable  L:Cancel");
 }

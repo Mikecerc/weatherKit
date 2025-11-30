@@ -10,7 +10,7 @@ static const int info_page_counts[] = {
     2,  // UI_PAGE_LIGHTNING_MAP - 2 pages
     2,  // UI_PAGE_CALCULATED - 2 pages
     3,  // UI_PAGE_STORM_TRACKER - 3 pages (algorithm explanation)
-    1,  // UI_PAGE_SENSOR_STATUS - 1 page
+    2,  // UI_PAGE_SENSOR_STATUS - 2 pages (sensors + LoRa info)
     0,  // UI_PAGE_SETTINGS - no info (has About already)
 };
 
@@ -176,14 +176,26 @@ static void ui_draw_storm_info_page2(void)
 
 static void ui_draw_sensor_info_page0(void)
 {
-    ui_draw_info_header("Sensors", 0, 1);
+    ui_draw_info_header("Sensors", 0, 2);
     
     ui_draw_string(4, 16, "Remote: External");
-    ui_draw_string(4, 26, "sensor connection.");
-    ui_draw_string(4, 36, "LoRa: Future feature");
-    ui_draw_string(4, 46, "for long range.");
+    ui_draw_string(4, 26, "sensor via LoRa.");
+    ui_draw_string(4, 36, "RSSI: Signal strength");
+    ui_draw_string(4, 46, "SNR: Signal quality.");
     
-    ui_draw_info_footer(1);
+    ui_draw_info_footer(2);
+}
+
+static void ui_draw_sensor_info_page1(void)
+{
+    ui_draw_info_header("Sensors", 1, 2);
+    
+    ui_draw_string(4, 16, "LoRa: 915MHz radio");
+    ui_draw_string(4, 26, "Power: Lo(safe) or");
+    ui_draw_string(4, 36, "Hi(needs antenna!)");
+    ui_draw_string(4, 46, "TX/RX: packet counts");
+    
+    ui_draw_info_footer(2);
 }
 
 // ============================================================================
@@ -228,7 +240,8 @@ void ui_draw_info_page(int info_page_num)
             break;
             
         case UI_PAGE_SENSOR_STATUS:
-            ui_draw_sensor_info_page0();
+            if (info_page_num == 0) ui_draw_sensor_info_page0();
+            else ui_draw_sensor_info_page1();
             break;
             
         default:

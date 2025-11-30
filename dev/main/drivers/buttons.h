@@ -21,7 +21,9 @@ typedef enum {
     BUTTON_LEFT_SHORT,
     BUTTON_LEFT_LONG,
     BUTTON_RIGHT_SHORT,
-    BUTTON_RIGHT_LONG
+    BUTTON_RIGHT_LONG,
+    BUTTON_BOTH_LONG,       // Both buttons held for long press
+    BUTTON_ANY_PRESS        // Any button pressed (for wake from standby)
 } button_event_t;
 
 /**

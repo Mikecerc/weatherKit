@@ -17,6 +17,7 @@ static i2c_master_dev_handle_t oled_dev = NULL;
 
 // Display buffer
 static uint8_t display_buffer[OLED_WIDTH * OLED_HEIGHT / 8];
+static bool display_sleeping = false;
 
 /**
  * @brief Write command to OLED
@@ -47,7 +48,7 @@ static esp_err_t oled_write_data(uint8_t *data, size_t len)
  */
 static esp_err_t i2c_init(void)
 {
-    ESP_LOGI(TAG, "Initializing I2C bus...");
+    ESP_LOGI(TAG, "Initializing I2C bus (SDA=%d, SCL=%d)...", PIN_I2C_SDA, PIN_I2C_SCL);
     
     i2c_master_bus_config_t bus_config = {
         .i2c_port = I2C_HOST,
@@ -59,6 +60,7 @@ static esp_err_t i2c_init(void)
     };
     ESP_ERROR_CHECK(i2c_new_master_bus(&bus_config, &i2c_bus));
 
+    // Add the OLED device at configured address
     i2c_device_config_t dev_config = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address = I2C_ADDR_OLED,
@@ -66,6 +68,7 @@ static esp_err_t i2c_init(void)
     };
     ESP_ERROR_CHECK(i2c_master_bus_add_device(i2c_bus, &dev_config, &oled_dev));
     
+    ESP_LOGI(TAG, "I2C bus initialized, OLED device at 0x%02X", I2C_ADDR_OLED);
     return ESP_OK;
 }
 
@@ -208,4 +211,27 @@ void display_set_brightness(uint8_t brightness)
     
     oled_write_cmd(0x81);  // Set contrast command
     oled_write_cmd(hw_brightness);
+}
+
+void display_sleep(void)
+{
+    if (display_sleeping) return;
+    
+    oled_write_cmd(0xAE);  // Display OFF
+    display_sleeping = true;
+    ESP_LOGI(TAG, "Display entering sleep mode");
+}
+
+void display_wake(void)
+{
+    if (!display_sleeping) return;
+    
+    oled_write_cmd(0xAF);  // Display ON
+    display_sleeping = false;
+    ESP_LOGI(TAG, "Display waking from sleep");
+}
+
+bool display_is_sleeping(void)
+{
+    return display_sleeping;
 }

@@ -23,7 +23,9 @@ typedef enum {
 typedef enum {
     SETTINGS_BRIGHTNESS = 0,
     SETTINGS_UNITS,
-    SETTINGS_LORA_TX,
+    SETTINGS_REFRESH_RATE,      // Sensor refresh rate (5-60s)
+    SETTINGS_LOCATE,            // Locate mode (LED on/off)
+    SETTINGS_HIGH_POWER,        // Send high power setting to sensor
     SETTINGS_ABOUT,
     SETTINGS_COUNT
 } settings_item_t;
@@ -53,7 +55,9 @@ typedef struct {
 typedef struct {
     uint8_t brightness;         // 0-100%
     unit_system_t units;        // Metric or Imperial
-    bool lora_high_power;       // High power TX (resets to false on boot)
+    uint8_t refresh_rate;       // Sensor refresh rate in seconds (5-60)
+    bool locate_enabled;        // Locate LED enabled
+    bool sensor_high_power;     // High power mode for sensor TX
 } ui_settings_t;
 
 /**
@@ -118,11 +122,49 @@ void ui_check_refresh(void);
 const ui_settings_t* ui_get_settings(void);
 
 /**
- * @brief Check if LoRa high power TX is enabled
- * @note This setting resets to false on every boot for safety
- * @return true if high power TX is enabled, false for low power
+ * @brief Check if locate mode is enabled
+ * @return true if locate LED should be on
  */
-bool ui_is_lora_high_power(void);
+bool ui_is_locate_enabled(void);
+
+/**
+ * @brief Get current sensor refresh rate setting
+ * @return Refresh rate in seconds
+ */
+uint8_t ui_get_refresh_rate(void);
+
+/**
+ * @brief Check if sensor high power is enabled
+ * @return true if sensor should use high power TX
+ */
+bool ui_is_sensor_high_power(void);
+
+/**
+ * @brief Enter standby mode (display off, low power, still receiving data)
+ */
+void ui_enter_standby(void);
+
+/**
+ * @brief Exit standby mode (wake display)
+ */
+void ui_exit_standby(void);
+
+/**
+ * @brief Check if in standby mode
+ * @return true if in standby
+ */
+bool ui_is_standby(void);
+
+/**
+ * @brief Toggle standby mode
+ */
+void ui_toggle_standby(void);
+
+/**
+ * @brief Check if locate ping should be sent (clears flag after read)
+ * @return true if locate ping should be sent to sensor
+ */
+bool ui_check_locate_pending(void);
 
 /**
  * @brief Save settings to flash (NVS)

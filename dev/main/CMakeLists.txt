@@ -1,6 +1,7 @@
 idf_component_register(SRCS "main.c" 
                             "drivers/display.c" 
                             "drivers/buttons.c"
+                            "drivers/lora.c"
                             "ui/ui.c"
                             "ui/ui_pages.c"
                             "ui/ui_info.c"

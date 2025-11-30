@@ -8,6 +8,7 @@
 #include "ui_pages.h"
 #include "ui_info.h"
 #include "display.h"
+#include "lora.h"
 #include "nvs_flash.h"
 #include "nvs.h"
 #include "esp_log.h"
@@ -29,15 +30,20 @@ static settings_item_t settings_cursor = SETTINGS_BRIGHTNESS;
 static bool in_settings_edit = false;
 static bool in_about_view = false;
 static bool in_info_view = false;
+static bool in_lora_confirm = false;  // Confirmation dialog for LoRa high power
 static int info_page_num = 0;
 static weather_data_t cached_weather = {0};
 static ui_settings_t settings = {
     .brightness = 100,
     .units = UNITS_METRIC,
-    .lora_high_power = false    // Always starts low power for safety
+    .refresh_rate = 5,          // Default 5 second refresh
+    .locate_enabled = false,    // Locate mode off by default
+    .sensor_high_power = false  // Always starts low power for safety
 };
 static volatile bool refresh_pending = false;
 static volatile bool brightness_pending = false;
+static bool standby_mode = false;
+static volatile bool locate_pending = false;  // Send locate command to sensor
 
 // ============================================================================
 // 5x7 Font Table (ASCII 32-127)
@@ -281,7 +287,10 @@ static void ui_refresh_internal(void)
 {
     display_clear();
     
-    if (in_info_view) {
+    if (in_lora_confirm) {
+        // Draw LoRa high power confirmation dialog
+        ui_draw_lora_confirm();
+    } else if (in_info_view) {
         // Draw info page for current main page
         ui_draw_info_page(info_page_num);
     } else if (in_about_view) {
@@ -336,7 +345,11 @@ void ui_check_refresh(void)
 
 void ui_cycle(void)
 {
-    if (in_info_view) {
+    if (in_lora_confirm) {
+        // LEFT in confirm dialog = Cancel
+        in_lora_confirm = false;
+        // Stay in settings edit mode
+    } else if (in_info_view) {
         // Cycle through info pages
         int max_pages = ui_info_get_page_count();
         info_page_num = (info_page_num + 1) % max_pages;
@@ -354,7 +367,13 @@ void ui_cycle(void)
 
 void ui_select(void)
 {
-    if (in_info_view) {
+    if (in_lora_confirm) {
+        // RIGHT in confirm dialog = Enable high power
+        settings.sensor_high_power = true;
+        in_lora_confirm = false;
+        ESP_LOGW(TAG, "Sensor HIGH POWER enabled - ensure antenna is connected!");
+        // TODO: Send config to sensor
+    } else if (in_info_view) {
         // Exit info view
         in_info_view = false;
         info_page_num = 0;
@@ -376,10 +395,32 @@ void ui_select(void)
                     settings.units = (settings.units == UNITS_METRIC) ? 
                                      UNITS_IMPERIAL : UNITS_METRIC;
                     break;
-                case SETTINGS_LORA_TX:
-                    // Toggle LoRa high power TX
-                    settings.lora_high_power = !settings.lora_high_power;
-                    ESP_LOGI(TAG, "LoRa power: %s", settings.lora_high_power ? "HIGH" : "LOW");
+                case SETTINGS_REFRESH_RATE:
+                    // Cycle refresh rate: 5, 10, 15, 30, 60 seconds
+                    if (settings.refresh_rate < 10) settings.refresh_rate = 10;
+                    else if (settings.refresh_rate < 15) settings.refresh_rate = 15;
+                    else if (settings.refresh_rate < 30) settings.refresh_rate = 30;
+                    else if (settings.refresh_rate < 60) settings.refresh_rate = 60;
+                    else settings.refresh_rate = 5;
+                    ESP_LOGI(TAG, "Refresh rate: %ds", settings.refresh_rate);
+                    // TODO: Send config to sensor
+                    break;
+                case SETTINGS_LOCATE:
+                    // Toggle locate - send command to sensor
+                    settings.locate_enabled = !settings.locate_enabled;
+                    locate_pending = true;
+                    ESP_LOGI(TAG, "Locate: %s", settings.locate_enabled ? "ON" : "OFF");
+                    break;
+                case SETTINGS_HIGH_POWER:
+                    if (settings.sensor_high_power) {
+                        // Turning OFF - no confirmation needed
+                        settings.sensor_high_power = false;
+                        ESP_LOGI(TAG, "Sensor power: LOW");
+                        // TODO: Send config to sensor
+                    } else {
+                        // Turning ON - show confirmation dialog
+                        in_lora_confirm = true;
+                    }
                     break;
                 case SETTINGS_ABOUT:
                     // Enter about view
@@ -401,7 +442,10 @@ void ui_select(void)
 
 void ui_back(void)
 {
-    if (in_info_view) {
+    if (in_lora_confirm) {
+        // Cancel confirmation
+        in_lora_confirm = false;
+    } else if (in_info_view) {
         // Exit info view
         in_info_view = false;
         info_page_num = 0;
@@ -495,9 +539,26 @@ const ui_settings_t* ui_get_settings(void)
     return &settings;
 }
 
-bool ui_is_lora_high_power(void)
+bool ui_is_sensor_high_power(void)
 {
-    return settings.lora_high_power;
+    return settings.sensor_high_power;
+}
+
+bool ui_is_locate_enabled(void)
+{
+    return settings.locate_enabled;
+}
+
+uint8_t ui_get_refresh_rate(void)
+{
+    return settings.refresh_rate;
+}
+
+bool ui_check_locate_pending(void)
+{
+    bool pending = locate_pending;
+    locate_pending = false;
+    return pending;
 }
 
 // ============================================================================
@@ -575,4 +636,46 @@ esp_err_t ui_load_settings(void)
              settings.brightness, settings.units);
     
     return ESP_OK;
+}
+
+// ============================================================================
+// Standby Mode
+// ============================================================================
+
+void ui_enter_standby(void)
+{
+    if (standby_mode) return;
+    
+    standby_mode = true;
+    display_sleep();
+    ESP_LOGI(TAG, "Entering standby mode");
+}
+
+void ui_exit_standby(void)
+{
+    if (!standby_mode) return;
+    
+    standby_mode = false;
+    display_wake();
+    
+    // Restore brightness
+    display_set_brightness(settings.brightness);
+    
+    // Force refresh to redraw screen
+    refresh_pending = true;
+    ESP_LOGI(TAG, "Exiting standby mode");
+}
+
+bool ui_is_standby(void)
+{
+    return standby_mode;
+}
+
+void ui_toggle_standby(void)
+{
+    if (standby_mode) {
+        ui_exit_standby();
+    } else {
+        ui_enter_standby();
+    }
 }

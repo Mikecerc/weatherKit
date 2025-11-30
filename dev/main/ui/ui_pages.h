@@ -36,4 +36,9 @@ void ui_draw_settings_page(void);
  */
 void ui_draw_about(void);
 
+/**
+ * @brief Draw LoRa high power confirmation dialog
+ */
+void ui_draw_lora_confirm(void);
+
 #endif // UI_PAGES_H

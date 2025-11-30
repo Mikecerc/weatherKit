@@ -36,4 +36,20 @@ void display_fill_rect(int x, int y, int w, int h, bool on);
  */
 void display_set_brightness(uint8_t brightness);
 
+/**
+ * @brief Put display into sleep mode (very low power ~10µA)
+ */
+void display_sleep(void);
+
+/**
+ * @brief Wake display from sleep mode
+ */
+void display_wake(void);
+
+/**
+ * @brief Check if display is in sleep mode
+ * @return true if display is sleeping
+ */
+bool display_is_sleeping(void);
+
 #endif // DISPLAY_H

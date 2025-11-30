@@ -26,6 +26,11 @@ static button_state_t buttons[BUTTON_COUNT];
 static button_callback_t event_callback = NULL;
 static TaskHandle_t button_task_handle = NULL;
 
+// Track when both buttons were first pressed together
+static TickType_t both_pressed_start = 0;
+static bool both_long_press_fired = false;
+static bool any_press_sent = false;  // Track if we've sent ANY_PRESS this cycle
+
 /**
  * @brief Read button state (active low - pressed = 0)
  */
@@ -89,9 +94,63 @@ static void process_button(button_id_t button)
 static void button_task(void *pvParameters)
 {
     while (1) {
-        for (int i = 0; i < BUTTON_COUNT; i++) {
-            process_button(i);
+        // Check current raw button states first
+        bool left_pressed = read_button(BUTTON_LEFT);
+        bool right_pressed = read_button(BUTTON_RIGHT);
+        bool both_pressed = left_pressed && right_pressed;
+        bool any_pressed = left_pressed || right_pressed;
+        TickType_t now = xTaskGetTickCount();
+        
+        // Send ANY_PRESS once when any button is first pressed
+        if (any_pressed && !any_press_sent && event_callback) {
+            event_callback(BUTTON_ANY_PRESS);
+            any_press_sent = true;
         }
+        
+        // Reset ANY_PRESS tracking when all buttons released
+        if (!any_pressed) {
+            any_press_sent = false;
+        }
+        
+        // Handle BOTH buttons pressed - takes priority over individual buttons
+        if (both_pressed) {
+            // Update individual button states but don't fire events
+            buttons[BUTTON_LEFT].current_state = true;
+            buttons[BUTTON_LEFT].last_state = true;
+            buttons[BUTTON_RIGHT].current_state = true;
+            buttons[BUTTON_RIGHT].last_state = true;
+            
+            if (both_pressed_start == 0) {
+                // Just started pressing both
+                both_pressed_start = now;
+                both_long_press_fired = false;
+                // Suppress individual button events
+                buttons[BUTTON_LEFT].processed = true;
+                buttons[BUTTON_RIGHT].processed = true;
+            } else if (!both_long_press_fired) {
+                // Check for long press
+                TickType_t held_ms = (now - both_pressed_start) * portTICK_PERIOD_MS;
+                if (held_ms >= LONG_PRESS_TIME_MS) {
+                    both_long_press_fired = true;
+                    buttons[BUTTON_LEFT].long_press_fired = true;
+                    buttons[BUTTON_RIGHT].long_press_fired = true;
+                    
+                    if (event_callback) {
+                        event_callback(BUTTON_BOTH_LONG);
+                    }
+                }
+            }
+        } else {
+            // Not both pressed - reset tracking and process individual buttons
+            both_pressed_start = 0;
+            both_long_press_fired = false;
+            
+            // Process individual buttons only when not both pressed
+            for (int i = 0; i < BUTTON_COUNT; i++) {
+                process_button(i);
+            }
+        }
+        
         vTaskDelay(pdMS_TO_TICKS(POLL_INTERVAL_MS));
     }
 }
@@ -125,11 +184,11 @@ esp_err_t buttons_init(button_callback_t callback)
         buttons[i].long_press_fired = false;
     }
     
-    // Create button task - minimal stack since no logging in loop
+    // Create button task
     BaseType_t ret = xTaskCreate(
         button_task,
         "button_task",
-        2048,  // Sufficient for simple polling
+        3072,  // Increased stack for callback safety
         NULL,
         5,     // Medium priority
         &button_task_handle

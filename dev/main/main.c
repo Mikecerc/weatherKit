@@ -10,11 +10,17 @@
 #include "ui.h"
 #include "buttons.h"
 #include "storm_tracker.h"
+#include "lora.h"
+#include "lora_protocol.h"
 
 static const char *TAG = "main";
 
-// Queue for weather data updates
+// Queue for weather data updates from LoRa
 static QueueHandle_t weather_queue = NULL;
+
+// Track last time we received data from sensor
+static TickType_t last_sensor_data_time = 0;
+#define SENSOR_TIMEOUT_MS       60000   // Consider sensor disconnected after 60s
 
 /**
  * @brief Button event callback - runs in button task context, keep minimal!
@@ -24,9 +30,42 @@ static QueueHandle_t weather_queue = NULL;
  * - LEFT long: show info/help for current page
  * - RIGHT short: select (enter context or toggle option)
  * - RIGHT long: escape context (go back)
+ * - BOTH long: toggle standby mode (display off, still receiving data)
  */
+
+// Track if we just woke from standby - ignore events until all buttons released
+static bool just_woke_from_standby = false;
+
 static void button_callback(button_event_t event)
 {
+    // Ignore no-op events
+    if (event == BUTTON_EVENT_NONE) return;
+    
+    // If in standby mode, ANY button press wakes the display
+    if (ui_is_standby()) {
+        ui_exit_standby();
+        just_woke_from_standby = true;  // Set flag to ignore subsequent events
+        return;  // Don't process further - just wake up
+    }
+    
+    // If we just woke, ignore all events until ANY_PRESS stops coming
+    // (meaning all buttons have been released)
+    if (just_woke_from_standby) {
+        if (event == BUTTON_ANY_PRESS) {
+            // Still pressing - keep ignoring
+            return;
+        }
+        // Check if this is a release event (SHORT events fire on release)
+        // We want to ignore this first release
+        if (event == BUTTON_LEFT_SHORT || event == BUTTON_RIGHT_SHORT ||
+            event == BUTTON_LEFT_LONG || event == BUTTON_RIGHT_LONG ||
+            event == BUTTON_BOTH_LONG) {
+            just_woke_from_standby = false;  // Clear flag, next press will work
+            return;  // But ignore this one
+        }
+    }
+    
+    // Normal operation - process button events
     switch (event) {
         case BUTTON_LEFT_SHORT:
             ui_cycle();      // Cycle pages or menu items
@@ -44,76 +83,167 @@ static void button_callback(button_event_t event)
             ui_back();       // Escape current context
             break;
             
+        case BUTTON_BOTH_LONG:
+            ui_enter_standby();  // Enter standby mode
+            break;
+            
+        case BUTTON_ANY_PRESS:
+            // Already handled above for standby wake
+            // No action needed in normal mode
+            break;
+            
         default:
             break;
     }
 }
 
 /**
- * @brief Generate fake weather data for testing
+ * @brief LoRa weather data callback - called when weather packet received
+ * 
+ * This runs in the LoRa RX task context, so keep it fast.
+ * We just convert and queue the data for the main task.
  */
-static void generate_fake_weather(weather_data_t *data)
+static void on_weather_received(uint8_t src_id, const weather_payload_t *data, int8_t rssi)
 {
-    // Generate somewhat realistic fake data with small variations
-    static float base_temp = 22.0f;
-    static float base_humidity = 45.0f;
-    static float base_pressure = 1013.25f;
+    ESP_LOGI(TAG, "Weather data from sensor 0x%02X (RSSI: %d dBm)", src_id, rssi);
     
-    // Add small random variations
-    base_temp += ((float)(esp_random() % 100) - 50) / 100.0f;  // +/- 0.5
-    base_humidity += ((float)(esp_random() % 100) - 50) / 50.0f;  // +/- 1.0
-    base_pressure += ((float)(esp_random() % 100) - 50) / 25.0f;  // +/- 2.0
+    // Convert from protocol format to UI format
+    weather_data_t weather = {
+        .temperature = data->temperature / 100.0f,      // 0.01°C -> °C
+        .humidity = data->humidity / 100.0f,            // 0.01% -> %
+        .pressure = data->pressure / 10.0f,             // 0.1 hPa -> hPa
+        .lightning_dist = -1.0f,                        // Will be set below if strikes present
+        .sensor_connected = true
+    };
     
-    // Keep values in realistic ranges
-    if (base_temp < 15.0f) base_temp = 15.0f;
-    if (base_temp > 35.0f) base_temp = 35.0f;
-    if (base_humidity < 20.0f) base_humidity = 20.0f;
-    if (base_humidity > 80.0f) base_humidity = 80.0f;
-    if (base_pressure < 980.0f) base_pressure = 980.0f;
-    if (base_pressure > 1040.0f) base_pressure = 1040.0f;
-    
-    data->temperature = base_temp;
-    data->humidity = base_humidity;
-    data->pressure = base_pressure;
-    data->sensor_connected = false;  // No remote sensor yet
-    
-    // Randomly generate lightning (10% chance, random distance)
-    if ((esp_random() % 10) == 0) {
-        data->lightning_dist = (float)(esp_random() % 400) / 10.0f;  // 0-40km
-    } else {
-        data->lightning_dist = -1;  // No lightning
+    // Process lightning data
+    if (data->lightning.count > 0) {
+        // Find the closest strike
+        uint8_t closest = 255;
+        for (int i = 0; i < data->lightning.count && i < MAX_LIGHTNING_STRIKES; i++) {
+            if (data->lightning.distances[i] < closest && data->lightning.distances[i] != 0xFF) {
+                closest = data->lightning.distances[i];
+            }
+            // Record each strike in storm tracker
+            if (data->lightning.distances[i] != 0xFF) {
+                storm_tracker_record_lightning((float)data->lightning.distances[i]);
+                ESP_LOGI(TAG, "  Lightning strike: %d km", data->lightning.distances[i]);
+            }
+        }
+        if (closest < 255) {
+            weather.lightning_dist = (float)closest;
+        }
     }
+    
+    // Record weather in storm tracker
+    storm_tracker_record_weather(weather.temperature, weather.humidity, weather.pressure);
+    
+    // Update last received time
+    last_sensor_data_time = xTaskGetTickCount();
+    
+    // Send to queue for UI task
+    if (weather_queue != NULL) {
+        xQueueOverwrite(weather_queue, &weather);
+    }
+    
+    ESP_LOGI(TAG, "  Temp: %.1f°C, Humidity: %.1f%%, Pressure: %.1f hPa",
+             weather.temperature, weather.humidity, weather.pressure);
 }
 
 /**
- * @brief Task to read sensors and generate weather data
+ * @brief LoRa status callback - called when status/heartbeat packet received
  */
-static void sensor_task(void *pvParameters)
+static void on_status_received(uint8_t src_id, const status_payload_t *data, int8_t rssi)
 {
-    weather_data_t weather;
+    ESP_LOGI(TAG, "Status from sensor 0x%02X: Battery %d%% (%dmV), RSSI %d",
+             src_id, data->battery_percent, data->battery_mv, rssi);
     
-    ESP_LOGI(TAG, "Sensor task started");
+    if (data->error_flags) {
+        ESP_LOGW(TAG, "  Sensor errors: 0x%02X", data->error_flags);
+    }
+    
+    // Update last received time (status counts as valid communication)
+    last_sensor_data_time = xTaskGetTickCount();
+}
+
+/**
+ * @brief Task to receive LoRa packets
+ * 
+ * Simple polling loop - matches working Inteform library exactly
+ */
+static void lora_rx_task(void *pvParameters)
+{
+    ESP_LOGI(TAG, "LoRa RX task started - waiting for sensor data...");
+    
+    static int loop_count = 0;
     
     while (1) {
-        // Generate fake data (replace with real sensor reads later)
-        generate_fake_weather(&weather);
+        loop_count++;
         
-        // Record weather data in storm tracker
-        storm_tracker_record_weather(weather.temperature, weather.humidity, weather.pressure);
-        
-        // If lightning detected, record it in storm tracker
-        if (weather.lightning_dist >= 0) {
-            storm_tracker_record_lightning(weather.lightning_dist);
-            ESP_LOGI(TAG, "Lightning strike detected: %.1f km", weather.lightning_dist);
+        // Check if UI requested a locate ping
+        if (ui_check_locate_pending()) {
+            ESP_LOGI(TAG, "Sending LOCATE ping to sensor...");
+            esp_err_t err = lora_send_ping(LORA_DEVICE_ID_REMOTE, true);
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, "Locate ping sent successfully");
+            } else {
+                ESP_LOGW(TAG, "Locate ping failed: %s", esp_err_to_name(err));
+            }
         }
         
-        // Send to queue for UI task
-        if (weather_queue != NULL) {
-            xQueueOverwrite(weather_queue, &weather);
+        // Enter receive mode
+        lora_receive();
+        
+        // Poll for received packets
+        while (lora_received()) {
+            ESP_LOGI(TAG, ">>> Packet detected!");
+            bool processed = lora_process_rx();
+            ESP_LOGI(TAG, ">>> Process: %s", processed ? "OK" : "FAILED");
+            lora_receive();
         }
         
-        // Update every 2 seconds
-        vTaskDelay(pdMS_TO_TICKS(2000));
+        // Debug every ~10 seconds
+        if (loop_count % 1000 == 0) {
+            lora_status_t st;
+            lora_get_status(&st);
+            ESP_LOGI(TAG, "RX loop %d: RX=%lu, rejected=%lu, CRC_err=%lu", 
+                     loop_count, st.packets_received, st.packets_rejected, st.crc_errors);
+        }
+        
+        // Check for pending locate command from UI
+        if (ui_check_locate_pending()) {
+            ESP_LOGI(TAG, "Sending LOCATE ping to sensor...");
+            esp_err_t err = lora_send_ping(LORA_DEVICE_ID_REMOTE, true);
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, "Locate ping sent");
+            } else {
+                ESP_LOGW(TAG, "Locate ping failed: %s", esp_err_to_name(err));
+            }
+            // Go back to receive mode
+            lora_receive();
+        }
+        
+        vTaskDelay(1);
+        
+        // Check if sensor has timed out
+        if (last_sensor_data_time != 0) {
+            TickType_t elapsed = (xTaskGetTickCount() - last_sensor_data_time) * portTICK_PERIOD_MS;
+            if (elapsed > SENSOR_TIMEOUT_MS) {
+                // Sensor timed out - mark as disconnected
+                weather_data_t timeout_update = {
+                    .temperature = 0,
+                    .humidity = 0,
+                    .pressure = 0,
+                    .lightning_dist = -1,
+                    .sensor_connected = false
+                };
+                if (weather_queue != NULL) {
+                    xQueueOverwrite(weather_queue, &timeout_update);
+                }
+                last_sensor_data_time = 0;  // Reset so we don't spam
+                ESP_LOGW(TAG, "Sensor timeout - no data for %d seconds", SENSOR_TIMEOUT_MS / 1000);
+            }
+        }
     }
 }
 
@@ -194,11 +324,25 @@ void app_main(void)
     ESP_ERROR_CHECK(buttons_init(button_callback));
     ESP_LOGI(TAG, "Buttons initialized");
     
-    // Set initial fake data
+    // Initialize LoRa module
+    ret = lora_init();
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "LoRa initialized");
+        // Run diagnostics to verify hardware
+        lora_run_diagnostics();
+        
+        // Set up callbacks for received data
+        lora_set_weather_callback(on_weather_received);
+        lora_set_status_callback(on_status_received);
+    } else {
+        ESP_LOGE(TAG, "LoRa init failed: %s - cannot receive sensor data!", esp_err_to_name(ret));
+    }
+    
+    // Set initial state - waiting for sensor
     weather_data_t initial_weather = {
-        .temperature = 22.5f,
-        .humidity = 45.0f,
-        .pressure = 1013.25f,
+        .temperature = 0.0f,
+        .humidity = 0.0f,
+        .pressure = 0.0f,
         .lightning_dist = -1,
         .sensor_connected = false
     };
@@ -207,23 +351,29 @@ void app_main(void)
     // Create tasks
     // Button task is created inside buttons_init()
     
-    // Sensor reading task - lower priority
-    xTaskCreate(sensor_task, "sensor_task", 4096, NULL, 3, NULL);
+    // LoRa receive task - medium-high priority
+    if (lora_is_initialized()) {
+        xTaskCreate(lora_rx_task, "lora_rx_task", 4096, NULL, 5, NULL);
+    }
     
     // UI update task - medium priority
     xTaskCreate(ui_task, "ui_task", 4096, NULL, 4, NULL);
     
-    ESP_LOGI(TAG, "WeatherKit ready!");
+    ESP_LOGI(TAG, "WeatherKit Base Station ready!");
+    ESP_LOGI(TAG, "Waiting for remote sensor data via LoRa...");
     ESP_LOGI(TAG, "Use LEFT/RIGHT buttons to navigate pages");
-    ESP_LOGI(TAG, "Hold LEFT to go back, hold RIGHT to enter/edit");
     
     // Main task can exit - everything runs in FreeRTOS tasks
     // Or we can use it for additional monitoring
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(10000));
+        vTaskDelay(pdMS_TO_TICKS(30000));
         
         // Periodic status log
-        ESP_LOGI(TAG, "System running - Page: %d, Free heap: %lu bytes",
-                 ui_get_current_page(), (unsigned long)esp_get_free_heap_size());
+        lora_status_t lora_status;
+        lora_get_status(&lora_status);
+        ESP_LOGI(TAG, "Status: Heap=%lu, LoRa RX=%lu, Sensor=%s",
+                 (unsigned long)esp_get_free_heap_size(),
+                 lora_status.packets_received,
+                 (last_sensor_data_time != 0) ? "Connected" : "Waiting");
     }
 }
