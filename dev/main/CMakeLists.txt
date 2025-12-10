@@ -1,0 +1,11 @@
+idf_component_register(SRCS "main.c" 
+                            "drivers/display.c" 
+                            "drivers/buttons.c"
+                            "drivers/lora.c"
+                            "ui/ui.c"
+                            "ui/ui_pages.c"
+                            "ui/ui_info.c"
+                            "weather/weather_calc.c" 
+                            "weather/storm_tracker.c"
+                    INCLUDE_DIRS "." "drivers" "ui" "weather"
+                    REQUIRES driver esp_timer nvs_flash)
