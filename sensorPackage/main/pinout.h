@@ -39,10 +39,10 @@
 // Data Out Pins (HX710B, AS3935, AHT20 sensors)
 // =============================================================================
 #define PIN_AS3935_IRQ      7      //Interrupt pin for lightning sensor
-#define PIN_HX710B_DOUT     12     //Data out for pressure snesor
+#define PIN_HX710B_DOUT     10     //Data out for pressure snesor
 
 //==============================================================================
-//Chirper Pin
+//Chirper Pins
 //==============================================================================
 #define PIN_CHIRPER         6     // Chirper output pin
 
@@ -50,13 +50,13 @@
 // LoRa Module (RA-02 / SX1278) - SPI
 // Avoiding PSRAM GPIO 33-37
 // =============================================================================
-//#define PIN_LORA_SCK        10      // SPI Clock
-//#define PIN_LORA_MISO       9       // SPI Master In, Slave Out  
-//#define PIN_LORA_MOSI       8       // SPI Master Out, Slave In
-//#define PIN_LORA_NSS        7       // Chip Select (active low)
-//#define PIN_LORA_RST        11       // Reset (active low)
-//#define PIN_LORA_DIO0       5       // Interrupt: RX done, TX done, CAD done
-//#define PIN_LORA_DIO1       6       // Interrupt: RX timeout (optional)
+#define PIN_LORA_SCK        3       // SPI Clock
+#define PIN_LORA_MISO       2       // SPI Master In, Slave Out  
+#define PIN_LORA_MOSI       1       // SPI Master Out, Slave In
+#define PIN_LORA_NSS        13      // Chip Select (active low)
+#define PIN_LORA_RST        12      // Reset (active low)
+#define PIN_LORA_DIO0       5       // Interrupt: RX done, TX done, CAD done
+#define PIN_LORA_DIO1       4       // Interrupt: RX timeout (optional)
 // DIO2-DIO5 optional, directly on SX1278 chip (under metal shield on RA-02)
 
 // SPI Configuration for LoRa
