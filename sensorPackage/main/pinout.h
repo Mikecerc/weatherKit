@@ -18,6 +18,10 @@
 #ifndef PINOUT_H
 #define PINOUT_H
 
+#define PIN_BUZZER 6
+
+#define PIN_LIGHTNING_INT 11
+
 // =============================================================================
 // I2C Bus (AHT20, AS3935 sensors)
 // =============================================================================
@@ -25,6 +29,13 @@
 #define PIN_I2C_SCL         9
 #define I2C_FREQ_HZ         400000
 #define I2C_HOST            I2C_NUM_0
+
+// =============================================================================
+// Pressure sensor SPI (if using SPI mode)
+// =============================================================================
+#define PIN_PRESSURE_SPI_SCK    13
+#define PIN_PRESSURE_SPI_MOSI   12
+
 
 // I2C Device Addresses
 #define I2C_ADDR_AHT20      0x38    // or 0x77 depending on SDO pin

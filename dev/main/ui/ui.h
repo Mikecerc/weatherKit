@@ -167,6 +167,12 @@ void ui_toggle_standby(void);
 bool ui_check_locate_pending(void);
 
 /**
+ * @brief Check if config update should be sent (clears flag after read)
+ * @return true if config should be sent to sensor
+ */
+bool ui_check_config_pending(void);
+
+/**
  * @brief Save settings to flash (NVS)
  * @return ESP_OK on success
  */

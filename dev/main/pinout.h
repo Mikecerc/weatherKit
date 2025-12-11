@@ -4,16 +4,8 @@
  * 
  * Board: Waveshare ESP32-S3-Zero
  * 
- * All GPIO pin assignments should be defined here to avoid conflicts.
+ * All GPIO pin assignments should be defined here
  * 
- * ESP32-S3-Zero Notes:
- * - GPIO 0: Strapping pin (BOOT button), avoid for general use
- * - GPIO 3: Strapping pin, avoid for general use  
- * - GPIO 19-20: USB D-/D+, don't use (USB in use)
- * - GPIO 21: Connected to WS2812 RGB LED on board
- * - GPIO 26-32: Connected to SPI flash, don't use
- * - GPIO 33-37: Connected to PSRAM, NOT AVAILABLE on this board!
- * - GPIO 45-46: Strapping pins, avoid for general use
  */
 
 #ifndef PINOUT_H
@@ -58,19 +50,11 @@
 // LoRa TX Power Levels (dBm)
 // SX1278 PA_BOOST range: +2 to +17 dBm (or +20 with PA_HP)
 #define LORA_TX_POWER_LOW   2       // +2 dBm - safe without antenna
-#define LORA_TX_POWER_HIGH  17      // +17 dBm - requires antenna!
+#define LORA_TX_POWER_HIGH  17      // +17 dBm - requires antenna
 
 // =============================================================================
 // Onboard RGB LED (WS2812)
 // =============================================================================
 #define PIN_RGB_LED         21      // WS2812 on ESP32-S3-Zero
-
-// =============================================================================
-// Available GPIOs (not currently used)
-// =============================================================================
-// GPIO 10: Available
-// GPIO 14-18: Available (active SPI flash may use some)
-// GPIO 38-44: Available
-// GPIO 47-48: Available
 
 #endif // PINOUT_H
