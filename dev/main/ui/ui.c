@@ -44,6 +44,7 @@ static volatile bool refresh_pending = false;
 static volatile bool brightness_pending = false;
 static bool standby_mode = false;
 static volatile bool locate_pending = false;  // Send locate command to sensor
+static volatile bool config_pending = false;  // Send config update to sensor
 
 // ============================================================================
 // 5x7 Font Table (ASCII 32-127)
@@ -372,7 +373,7 @@ void ui_select(void)
         settings.sensor_high_power = true;
         in_lora_confirm = false;
         ESP_LOGW(TAG, "Sensor HIGH POWER enabled - ensure antenna is connected!");
-        // TODO: Send config to sensor
+        config_pending = true;  // Send config to sensor
     } else if (in_info_view) {
         // Exit info view
         in_info_view = false;
@@ -403,7 +404,7 @@ void ui_select(void)
                     else if (settings.refresh_rate < 60) settings.refresh_rate = 60;
                     else settings.refresh_rate = 5;
                     ESP_LOGI(TAG, "Refresh rate: %ds", settings.refresh_rate);
-                    // TODO: Send config to sensor
+                    config_pending = true;  // Send config to sensor
                     break;
                 case SETTINGS_LOCATE:
                     // Toggle locate - send command to sensor
@@ -416,7 +417,7 @@ void ui_select(void)
                         // Turning OFF - no confirmation needed
                         settings.sensor_high_power = false;
                         ESP_LOGI(TAG, "Sensor power: LOW");
-                        // TODO: Send config to sensor
+                        config_pending = true;  // Send config to sensor
                     } else {
                         // Turning ON - show confirmation dialog
                         in_lora_confirm = true;
@@ -558,6 +559,13 @@ bool ui_check_locate_pending(void)
 {
     bool pending = locate_pending;
     locate_pending = false;
+    return pending;
+}
+
+bool ui_check_config_pending(void)
+{
+    bool pending = config_pending;
+    config_pending = false;
     return pending;
 }
 

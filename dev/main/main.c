@@ -191,6 +191,24 @@ static void lora_rx_task(void *pvParameters)
             }
         }
         
+        // Check if UI changed config (refresh rate, high power)
+        if (ui_check_config_pending()) {
+            ESP_LOGI(TAG, "Sending CONFIG to sensor...");
+            config_payload_t config = {
+                .update_interval = ui_get_refresh_rate(),
+                .heartbeat_interval = 60,  // Fixed heartbeat interval
+                .tx_power = ui_is_sensor_high_power() ? TX_POWER_HIGH : TX_POWER_LOW,
+                .flags = ui_is_sensor_high_power() ? 0 : CFG_ADAPTIVE_POWER  // Adaptive when not high power
+            };
+            esp_err_t err = lora_send_config(LORA_DEVICE_ID_REMOTE, &config);
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, "Config sent: interval=%ds, power=%d", 
+                         config.update_interval, config.tx_power);
+            } else {
+                ESP_LOGW(TAG, "Config send failed: %s", esp_err_to_name(err));
+            }
+        }
+        
         // Enter receive mode
         lora_receive();
         
@@ -208,19 +226,6 @@ static void lora_rx_task(void *pvParameters)
             lora_get_status(&st);
             ESP_LOGI(TAG, "RX loop %d: RX=%lu, rejected=%lu, CRC_err=%lu", 
                      loop_count, st.packets_received, st.packets_rejected, st.crc_errors);
-        }
-        
-        // Check for pending locate command from UI
-        if (ui_check_locate_pending()) {
-            ESP_LOGI(TAG, "Sending LOCATE ping to sensor...");
-            esp_err_t err = lora_send_ping(LORA_DEVICE_ID_REMOTE, true);
-            if (err == ESP_OK) {
-                ESP_LOGI(TAG, "Locate ping sent");
-            } else {
-                ESP_LOGW(TAG, "Locate ping failed: %s", esp_err_to_name(err));
-            }
-            // Go back to receive mode
-            lora_receive();
         }
         
         vTaskDelay(1);
@@ -334,6 +339,10 @@ void app_main(void)
         // Set up callbacks for received data
         lora_set_weather_callback(on_weather_received);
         lora_set_status_callback(on_status_received);
+        
+        // Enable adaptive power - adjusts TX power based on link quality
+        lora_set_adaptive_power(true);
+        ESP_LOGI(TAG, "Adaptive power enabled");
     } else {
         ESP_LOGE(TAG, "LoRa init failed: %s - cannot receive sensor data!", esp_err_to_name(ret));
     }
@@ -364,7 +373,6 @@ void app_main(void)
     ESP_LOGI(TAG, "Use LEFT/RIGHT buttons to navigate pages");
     
     // Main task can exit - everything runs in FreeRTOS tasks
-    // Or we can use it for additional monitoring
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(30000));
         
