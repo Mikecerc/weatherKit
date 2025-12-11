@@ -12,6 +12,7 @@
 #include "drivers/lora_protocol.h"
 #include "drivers/led.h"
 #include "pinout.h"
+#include "drivers/lightning_driver.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -416,7 +417,11 @@ void sensor_routine_force_send(void)
     ESP_LOGI(TAG, "Force sending weather data...");
     
     weather_payload_t weather = {0};
+<<<<<<< HEAD
+    //generate_fake_weather_data(&weather);
+=======
     generate_fake_weather_data(&weather);
+>>>>>>> a79b699e4732d53f924e94b7514f3b0e58771170
     
     esp_err_t err = lora_send_weather(&weather);
     if (err == ESP_OK) {
@@ -450,4 +455,8 @@ void sensor_routine_get_stats(uint32_t *sent, uint32_t *acked, uint32_t *failed)
     if (sent) *sent = packets_sent;
     if (acked) *acked = packets_acked;
     if (failed) *failed = packets_failed;
+<<<<<<< HEAD
 }
+=======
+}
+>>>>>>> a79b699e4732d53f924e94b7514f3b0e58771170

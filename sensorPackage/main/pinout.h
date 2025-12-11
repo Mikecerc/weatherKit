@@ -23,7 +23,7 @@
 #define PIN_LIGHTNING_INT 11
 
 // =============================================================================
-// I2C Bus (BME280, AS3935 sensors)
+// I2C Bus (AHT20, AS3935 sensors)
 // =============================================================================
 #define PIN_I2C_SDA         8
 #define PIN_I2C_SCL         9
@@ -38,18 +38,34 @@
 
 
 // I2C Device Addresses
-#define I2C_ADDR_BME280     0x76    // or 0x77 depending on SDO pin
+#define I2C_ADDR_AHT20      0x38    // or 0x77 depending on SDO pin
 #define I2C_ADDR_AS3935     0x03    // Lightning sensor
+
+// =============================================================================
+// SPI Bus (HX710B sensor)
+// =============================================================================
+#define PIN_SPI_CLK         11
+
+// =============================================================================
+// Data Out Pins (HX710B, AS3935, AHT20 sensors)
+// =============================================================================
+#define PIN_AS3935_IRQ      7      //Interrupt pin for lightning sensor
+#define PIN_HX710B_DOUT     10     //Data out for pressure snesor
+
+//==============================================================================
+//Chirper Pins
+//==============================================================================
+#define PIN_CHIRPER         6     // Chirper output pin
 
 // =============================================================================
 // LoRa Module (RA-02 / SX1278) - SPI
 // Avoiding PSRAM GPIO 33-37
 // =============================================================================
-#define PIN_LORA_SCK        10      // SPI Clock
+#define PIN_LORA_SCK        3       // SPI Clock
 #define PIN_LORA_MISO       2       // SPI Master In, Slave Out  
 #define PIN_LORA_MOSI       1       // SPI Master Out, Slave In
-#define PIN_LORA_NSS        7       // Chip Select (active low)
-#define PIN_LORA_RST        3       // Reset (active low)
+#define PIN_LORA_NSS        13      // Chip Select (active low)
+#define PIN_LORA_RST        12      // Reset (active low)
 #define PIN_LORA_DIO0       5       // Interrupt: RX done, TX done, CAD done
 #define PIN_LORA_DIO1       4       // Interrupt: RX timeout (optional)
 // DIO2-DIO5 optional, directly on SX1278 chip (under metal shield on RA-02)

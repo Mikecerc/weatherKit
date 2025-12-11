@@ -18,6 +18,9 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
+#include "driver/i2c.h"
+#include "driver/gpio.h"
+#include "esp_system.h"
 
 #include "pinout.h"
 #include "sensor_routine.h"
@@ -50,7 +53,7 @@ void app_main(void)
         .update_interval_sec = 5,       // Send weather data every 5 seconds
         .heartbeat_interval_sec = 300,  // Send status every 5 minutes
         .adaptive_power = true,         // Enable adaptive TX power
-        .use_fake_data = true           // Use fake sensor data
+        .use_fake_data = false           // Use fake sensor data
     };
     
     // Initialize sensor routine
