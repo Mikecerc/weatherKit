@@ -91,13 +91,6 @@ void sensor_routine_update_config(const sensor_config_t *config);
 void sensor_routine_get_config(sensor_config_t *config);
 
 /**
- * @brief Force an immediate sensor reading and transmission
- * 
- * Useful for testing or when base station requests data.
- */
-void sensor_routine_force_send(void);
-
-/**
  * @brief Get uptime in minutes
  * @return Uptime in minutes (wraps at 65535)
  */
@@ -111,11 +104,4 @@ uint16_t sensor_routine_get_uptime_min(void);
  */
 void sensor_routine_get_stats(uint32_t *sent, uint32_t *acked, uint32_t *failed);
 
-/**
- * @brief Pack a `weather_data_t` into a LoRa `weather_payload_t` and send it
- * to the base station using the LoRa driver.
- * @param s Pointer to sensor data snapshot
- * @return ESP_OK on success
- */
-esp_err_t sensors_pack_and_send(const weather_data_t *s);
 #endif // SENSOR_ROUTINE_H

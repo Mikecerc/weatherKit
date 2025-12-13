@@ -1,12 +1,12 @@
 {
   "C_Cpp.intelliSenseEngine": "default",
-  "idf.espIdfPath": "C:\\Users\\trsha\\.espressif\\tools\\esp-idf\\v5.5.1",
-  "idf.pythonInstallPath": "C:\\Users\\trsha\\.espressif\\tools\\idf-python\\3.11.2\\python.exe",
+  "idf.espIdfPath": "/home/mike/esp/v5.5.1/esp-idf",
+  "idf.pythonInstallPath": "/home/mike/.pyenv/shims/python",
   "idf.openOcdConfigs": [
     "board/esp32s3-builtin.cfg"
   ],
-  "idf.port": "COM3",
-  "idf.toolsPath": "C:\\Users\\trsha\\.espressif",
+  "idf.port": "/dev/ttyACM0",
+  "idf.toolsPath": "/home/mike/.espressif",
   "idf.customExtraVars": {
     "IDF_TARGET": "esp32s3"
   },
@@ -14,8 +14,7 @@
   "clangd.arguments": [
     "--background-index",
     "--query-driver=C:\\Users\\trsha\\.espressif\\tools\\xtensa-esp-elf\\esp-14.2.0_20241119\\xtensa-esp-elf\\bin\\xtensa-esp32s3-elf-gcc.exe",
-    "--compile-commands-dir=${workspaceFolder}\\build"
+    "--compile-commands-dir=c:\\Users\\trsha\\OneDrive\\Documents\\Kettering Stuff\\Fall '25 Classwork\\CE 420\\Final Project\\weatherKit-dev\\sensorPackage\\build"
   ],
-  "idf.flashType": "UART",
-  "idf.portWin": "COM4"
+  "idf.flashType": "UART"
 }

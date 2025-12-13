@@ -204,14 +204,15 @@ void led_set_color(uint8_t red, uint8_t green, uint8_t blue)
     current_g = green;
     current_b = blue;
     
-    // WS2812 uses GRB order
-    uint8_t grb[3] = {green, red, blue};
+    // Standard WS2812 uses GRB order, but some variants use RGB
+    // This LED appears to use RGB order
+    uint8_t rgb[3] = {red, green, blue};
     
     rmt_transmit_config_t tx_config = {
         .loop_count = 0,
     };
     
-    rmt_transmit(led_channel, led_encoder, grb, sizeof(grb), &tx_config);
+    rmt_transmit(led_channel, led_encoder, rgb, sizeof(rgb), &tx_config);
     rmt_tx_wait_all_done(led_channel, portMAX_DELAY);
 }
 

@@ -1,15 +1,16 @@
 /**
- * @file aht20_driver.c
- * @brief AHT20 temperature and humidity sensor driver implementation
+ * @file temp_humidity_driver.c
+ * @brief AHT20 temperature and humidity sensor driver implementation (new I2C API)
  */
 
-#include "aht20_driver.h"
+#include "temp_humidity_driver.h"
 #include "i2c_init.h"
 #include "pinout.h"
-#include "driver/i2c.h"
+#include "driver/i2c_master.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <string.h>
 
 static const char *TAG = "aht20";
 
@@ -26,26 +27,25 @@ static const char *TAG = "aht20";
 #define AHT20_TIMEOUT_MS        1000
 
 static bool aht20_initialized = false;
+static i2c_master_dev_handle_t aht20_dev_handle = NULL;
 
 /**
  * @brief Write command to AHT20
  */
 static esp_err_t aht20_write_cmd(uint8_t cmd, const uint8_t *data, size_t len)
 {
-    i2c_cmd_handle_t cmd_handle = i2c_cmd_link_create();
-    i2c_master_start(cmd_handle);
-    i2c_master_write_byte(cmd_handle, (I2C_ADDR_AHT20 << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(cmd_handle, cmd, true);
-    
-    if (data && len > 0) {
-        i2c_master_write(cmd_handle, data, len, true);
+    if (!aht20_dev_handle) {
+        return ESP_ERR_INVALID_STATE;
     }
     
-    i2c_master_stop(cmd_handle);
-    esp_err_t err = i2c_master_cmd_begin(I2C_HOST, cmd_handle, pdMS_TO_TICKS(AHT20_TIMEOUT_MS));
-    i2c_cmd_link_delete(cmd_handle);
+    // Build write buffer: command + optional data
+    uint8_t write_buf[4];
+    write_buf[0] = cmd;
+    if (data && len > 0 && len <= 3) {
+        memcpy(&write_buf[1], data, len);
+    }
     
-    return err;
+    return i2c_master_transmit(aht20_dev_handle, write_buf, 1 + len, AHT20_TIMEOUT_MS);
 }
 
 /**
@@ -53,21 +53,15 @@ static esp_err_t aht20_write_cmd(uint8_t cmd, const uint8_t *data, size_t len)
  */
 static esp_err_t aht20_read_data(uint8_t *data, size_t len)
 {
-    i2c_cmd_handle_t cmd_handle = i2c_cmd_link_create();
-    i2c_master_start(cmd_handle);
-    i2c_master_write_byte(cmd_handle, (I2C_ADDR_AHT20 << 1) | I2C_MASTER_READ, true);
-    
-    if (len > 1) {
-        i2c_master_read(cmd_handle, data, len - 1, I2C_MASTER_ACK);
+    if (!aht20_dev_handle) {
+        return ESP_ERR_INVALID_STATE;
     }
-    i2c_master_read_byte(cmd_handle, data + len - 1, I2C_MASTER_NACK);
     
-    i2c_master_stop(cmd_handle);
-    esp_err_t err = i2c_master_cmd_begin(I2C_HOST, cmd_handle, pdMS_TO_TICKS(AHT20_TIMEOUT_MS));
-    i2c_cmd_link_delete(cmd_handle);
-    
-    return err;
+    return i2c_master_receive(aht20_dev_handle, data, len, AHT20_TIMEOUT_MS);
 }
+
+// Forward declaration
+esp_err_t aht20_reset(void);
 
 esp_err_t aht20_init(void)
 {
@@ -78,10 +72,25 @@ esp_err_t aht20_init(void)
 
     ESP_LOGI(TAG, "Initializing AHT20...");
     
+    // Add AHT20 device to the I2C bus
+    i2c_device_config_t dev_config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = I2C_ADDR_AHT20,
+        .scl_speed_hz = I2C_FREQ_HZ,
+    };
+    
+    esp_err_t err = i2c_master_bus_add_device(i2c_bus_get_handle(), &dev_config, &aht20_dev_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to add AHT20 device: %s", esp_err_to_name(err));
+        return err;
+    }
+    
     // Send soft reset
-    esp_err_t err = aht20_reset();
+    err = aht20_reset();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to reset AHT20: %s", esp_err_to_name(err));
+        i2c_master_bus_rm_device(aht20_dev_handle);
+        aht20_dev_handle = NULL;
         return err;
     }
     
@@ -92,6 +101,8 @@ esp_err_t aht20_init(void)
     err = aht20_write_cmd(AHT20_CMD_INIT, init_data, 2);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize AHT20: %s", esp_err_to_name(err));
+        i2c_master_bus_rm_device(aht20_dev_handle);
+        aht20_dev_handle = NULL;
         return err;
     }
     
@@ -102,6 +113,8 @@ esp_err_t aht20_init(void)
     err = aht20_read_data(&status, 1);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to read status: %s", esp_err_to_name(err));
+        i2c_master_bus_rm_device(aht20_dev_handle);
+        aht20_dev_handle = NULL;
         return err;
     }
     
@@ -115,22 +128,49 @@ esp_err_t aht20_init(void)
     return ESP_OK;
 }
 
+esp_err_t aht20_deinit(void)
+{
+    if (aht20_dev_handle) {
+        i2c_master_bus_rm_device(aht20_dev_handle);
+        aht20_dev_handle = NULL;
+    }
+    aht20_initialized = false;
+    return ESP_OK;
+}
+
+esp_err_t aht20_reinit(void)
+{
+    ESP_LOGI(TAG, "Re-initializing AHT20...");
+    aht20_deinit();
+    return aht20_init();
+}
+
 esp_err_t aht20_read(aht20_data_t *data)
 {
     if (!data) {
         return ESP_ERR_INVALID_ARG;
     }
     
-    if (!aht20_initialized) {
+    if (!aht20_initialized || !aht20_dev_handle) {
         ESP_LOGE(TAG, "AHT20 not initialized");
         return ESP_ERR_INVALID_STATE;
     }
     
     data->valid = false;
     
-    // Trigger measurement
+    // Trigger measurement with retry
     uint8_t trigger_data[2] = {0x33, 0x00};
-    esp_err_t err = aht20_write_cmd(AHT20_CMD_TRIGGER, trigger_data, 2);
+    esp_err_t err = ESP_FAIL;
+    
+    for (int retry = 0; retry < 3; retry++) {
+        err = aht20_write_cmd(AHT20_CMD_TRIGGER, trigger_data, 2);
+        if (err == ESP_OK) {
+            break;
+        }
+        ESP_LOGW(TAG, "Trigger retry %d: %s", retry + 1, esp_err_to_name(err));
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to trigger measurement: %s", esp_err_to_name(err));
         return err;
@@ -189,7 +229,6 @@ bool aht20_is_present(void)
         return false;
     }
     
-    uint8_t data;
-    esp_err_t err = aht20_read_data(&data, 1);
-    return (err == ESP_OK);
+    // Use bus probe to check if device is present
+    return (i2c_master_probe(i2c_bus_get_handle(), I2C_ADDR_AHT20, 100) == ESP_OK);
 }

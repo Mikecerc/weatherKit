@@ -12,15 +12,11 @@
  * - AS3935 lightning detector (future)
  */
 
-#include "sdkconfig.h"
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
-#include "driver/i2c.h"
-#include "driver/gpio.h"
-#include "esp_system.h"
 
 #include "pinout.h"
 #include "sensor_routine.h"
@@ -48,12 +44,12 @@ void app_main(void)
     ESP_LOGI(TAG, "NVS initialized");
     
     // Configure sensor routine
-    // Using fake data for now until real sensor drivers are implemented
+    // Set use_fake_data = false to use real sensors
     sensor_config_t config = {
         .update_interval_sec = 5,       // Send weather data every 5 seconds
         .heartbeat_interval_sec = 300,  // Send status every 5 minutes
         .adaptive_power = true,         // Enable adaptive TX power
-        .use_fake_data = false           // Use fake sensor data
+        .use_fake_data = false          // Use real sensor data
     };
     
     // Initialize sensor routine

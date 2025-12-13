@@ -1,12 +1,12 @@
 /**
  * @file as3935_driver.c
- * @brief AS3935 Franklin Lightning Sensor driver implementation
+ * @brief AS3935 Franklin Lightning Sensor driver implementation (new I2C API)
  */
 
 #include "lightning_driver.h"
 #include "i2c_init.h"
 #include "pinout.h"
-#include "driver/i2c.h"
+#include "driver/i2c_master.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -42,23 +42,19 @@ static bool as3935_initialized = false;
 static uint32_t total_strikes = 0;
 static as3935_data_t last_data = {0};
 static void (*interrupt_callback)(as3935_interrupt_t) = NULL;
+static i2c_master_dev_handle_t as3935_dev_handle = NULL;
 
 /**
  * @brief Write to AS3935 register
  */
 static esp_err_t as3935_write_register(uint8_t reg, uint8_t value)
 {
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (I2C_ADDR_AS3935 << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(cmd, reg, true);
-    i2c_master_write_byte(cmd, value, true);
-    i2c_master_stop(cmd);
+    if (!as3935_dev_handle) {
+        return ESP_ERR_INVALID_STATE;
+    }
     
-    esp_err_t err = i2c_master_cmd_begin(I2C_HOST, cmd, pdMS_TO_TICKS(AS3935_TIMEOUT_MS));
-    i2c_cmd_link_delete(cmd);
-    
-    return err;
+    uint8_t write_buf[2] = {reg, value};
+    return i2c_master_transmit(as3935_dev_handle, write_buf, 2, AS3935_TIMEOUT_MS);
 }
 
 /**
@@ -67,21 +63,11 @@ static esp_err_t as3935_write_register(uint8_t reg, uint8_t value)
 static esp_err_t as3935_read_register(uint8_t reg, uint8_t *value)
 {
     if (!value) return ESP_ERR_INVALID_ARG;
+    if (!as3935_dev_handle) {
+        return ESP_ERR_INVALID_STATE;
+    }
     
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (I2C_ADDR_AS3935 << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(cmd, reg, true);
-    
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (I2C_ADDR_AS3935 << 1) | I2C_MASTER_READ, true);
-    i2c_master_read_byte(cmd, value, I2C_MASTER_NACK);
-    i2c_master_stop(cmd);
-    
-    esp_err_t err = i2c_master_cmd_begin(I2C_HOST, cmd, pdMS_TO_TICKS(AS3935_TIMEOUT_MS));
-    i2c_cmd_link_delete(cmd);
-    
-    return err;
+    return i2c_master_transmit_receive(as3935_dev_handle, &reg, 1, value, 1, AS3935_TIMEOUT_MS);
 }
 
 /**
@@ -131,10 +117,25 @@ esp_err_t as3935_init(const as3935_config_t *config)
         cfg = default_cfg;
     }
     
+    // Add AS3935 device to the I2C bus
+    i2c_device_config_t dev_config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = I2C_ADDR_AS3935,
+        .scl_speed_hz = I2C_FREQ_HZ,
+    };
+    
+    esp_err_t err = i2c_master_bus_add_device(i2c_bus_get_handle(), &dev_config, &as3935_dev_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to add AS3935 device: %s", esp_err_to_name(err));
+        return err;
+    }
+    
     // Initialize IRQ pin
-    esp_err_t err = as3935_init_irq();
+    err = as3935_init_irq();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize IRQ pin: %s", esp_err_to_name(err));
+        i2c_master_bus_rm_device(as3935_dev_handle);
+        as3935_dev_handle = NULL;
         return err;
     }
     
@@ -142,6 +143,8 @@ esp_err_t as3935_init(const as3935_config_t *config)
     err = as3935_write_register(AS3935_DIRECT_COMMAND, 0x96);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to reset AS3935: %s", esp_err_to_name(err));
+        i2c_master_bus_rm_device(as3935_dev_handle);
+        as3935_dev_handle = NULL;
         return err;
     }
     
@@ -151,6 +154,8 @@ esp_err_t as3935_init(const as3935_config_t *config)
     err = as3935_power_up();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to power up: %s", esp_err_to_name(err));
+        i2c_master_bus_rm_device(as3935_dev_handle);
+        as3935_dev_handle = NULL;
         return err;
     }
     
@@ -381,9 +386,8 @@ bool as3935_is_present(void)
         return false;
     }
     
-    uint8_t data;
-    esp_err_t err = as3935_read_register(AS3935_REG_AFE_GB, &data);
-    return (err == ESP_OK);
+    // Use bus probe to check if device is present
+    return (i2c_master_probe(i2c_bus_get_handle(), I2C_ADDR_AS3935, 100) == ESP_OK);
 }
 
 void as3935_register_interrupt_callback(void (*callback)(as3935_interrupt_t event))

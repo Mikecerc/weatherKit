@@ -13,9 +13,23 @@
 
 static const char *TAG = "hx710b";
 
-// Calibration parameters (adjust these based on your sensor)
-#define HX710B_SCALE_FACTOR     0.01f   // Convert raw to hPa (adjust after calibration)
-#define HX710B_BASELINE         8388608 // 2^23 (midpoint of 24-bit signed value)
+// HX710B ADC is 24-bit, range 0 to 16777215 (2^24 - 1)
+// Pressure sensor outputs 0.5V to 4.5V for its pressure range
+// At 3.3V supply, the HX710B reference is typically VCC
+// 
+// Voltage to ADC mapping (assuming 3.3V reference):
+//   0.5V = 0.5/3.3 * 16777215 = ~2,542,760
+//   4.5V = 4.5/3.3 * 16777215 = ~22,884,883 (but clamped to max)
+//
+// For atmospheric pressure (0 kPa gauge), output = 0.5V
+// This should read approximately 2.5 million raw counts
+
+#define HX710B_ADC_AT_0_5V      2542760     // Raw ADC value at 0.5V (0 kPa gauge)
+#define HX710B_ADC_AT_4_5V      16777215    // Clamped at max for 3.3V supply
+#define HX710B_PRESSURE_RANGE   40.0f       // Assuming 040KPG = 0-40 kPa gauge range
+
+// Atmospheric pressure in hPa (standard)
+#define ATMOSPHERIC_HPA         1013.25f
 
 static bool hx710b_initialized = false;
 static float calibration_offset = 0.0f;
@@ -132,28 +146,44 @@ esp_err_t hx710b_read(hx710b_data_t *data)
     
     portEXIT_CRITICAL(&mux);
     
-    // Convert from 24-bit two's complement to 32-bit signed
-    if (value & 0x800000) {
-        value |= 0xFF000000; // Sign extend
-    }
+    // HX710B outputs unsigned 24-bit value (0 to 16777215)
+    // No sign extension needed for this sensor
     
     data->raw_value = value;
     
-    // Convert to pressure (this is a simplified conversion)
-    // You'll need to calibrate this based on your specific sensor
-    float pressure = ((float)(value - HX710B_BASELINE) * HX710B_SCALE_FACTOR) + 1013.25f;
+    // Log raw value for debugging/calibration
+    ESP_LOGI(TAG, "Raw ADC value: %ld", (long)value);
+    
+    // Convert raw ADC to gauge pressure (kPa)
+    // voltage = raw / 16777215 * 3.3V
+    // At 0.5V (0 kPa gauge): raw ≈ 2,542,760
+    // At 4.5V (full scale):  raw would be ~22.8M but clamped
+    // 
+    // For now, use a simple linear mapping:
+    // gauge_kpa = (raw - ADC_at_0.5V) / (ADC_at_4.5V - ADC_at_0.5V) * pressure_range
+    
+    float gauge_kpa = ((float)value - HX710B_ADC_AT_0_5V) / 
+                      ((float)HX710B_ADC_AT_4_5V - HX710B_ADC_AT_0_5V) * 
+                      HX710B_PRESSURE_RANGE;
+    
+    // Convert gauge pressure to absolute pressure in hPa
+    // Absolute = Atmospheric + Gauge
+    // 1 kPa = 10 hPa
+    float pressure = ATMOSPHERIC_HPA + (gauge_kpa * 10.0f);
     pressure += calibration_offset;
     
-    // Sanity check (typical atmospheric pressure range)
-    if (pressure < 800.0f || pressure > 1200.0f) {
-        ESP_LOGW(TAG, "Pressure out of range: %.2f hPa (raw=%ld)", pressure, (long)value);
+    // Wider sanity check during calibration (300-1200 hPa)
+    if (pressure < 300.0f || pressure > 1200.0f) {
+        ESP_LOGW(TAG, "Pressure out of range: %.2f hPa (raw=%ld, gauge=%.2f kPa)", 
+                 pressure, (long)value, gauge_kpa);
         return ESP_ERR_INVALID_RESPONSE;
     }
     
     data->pressure_hpa = pressure;
     data->valid = true;
     
-    ESP_LOGD(TAG, "Pressure=%.2f hPa (raw=%ld)", pressure, (long)value);
+    ESP_LOGI(TAG, "Pressure=%.2f hPa (raw=%ld, gauge=%.2f kPa)", 
+             pressure, (long)value, gauge_kpa);
     
     return ESP_OK;
 }

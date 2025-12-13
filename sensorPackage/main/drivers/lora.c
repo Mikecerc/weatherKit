@@ -12,7 +12,6 @@
  * - Interrupt-driven RX using DIO0
  */
 
-#include "sdkconfig.h"
 #include "lora.h"
 #include "pinout.h"
 #include "freertos/FreeRTOS.h"
@@ -21,7 +20,6 @@
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 #include <string.h>
 
 static const char *TAG = "lora";
@@ -104,7 +102,7 @@ static lora_ping_cb_t ping_callback = NULL;
 
 // Adaptive power state
 static bool adaptive_power_enabled = false;
-static int8_t recent_rssi = RSSI_POOR;  // Start pessimistic (higher power), reduce when we get ACKs
+static int8_t recent_rssi = 0;  // Start with "excellent" to keep power low until we have real RSSI data
 static uint8_t current_tx_power = LORA_TX_POWER_LOW;
 
 // =============================================================================
@@ -196,17 +194,15 @@ esp_err_t lora_init(void)
     esp_err_t ret;
 
     ESP_LOGI(TAG, "Initializing LoRa module...");
-    ESP_LOGI(TAG, "Pins: SCK=%d, MISO=%d, MOSI=%d, NSS=%d, RST=%d, DIO0=%d",
-             PIN_LORA_SCK, PIN_LORA_MISO, PIN_LORA_MOSI, 
-             PIN_LORA_NSS, PIN_LORA_RST, PIN_LORA_DIO0);
 
     // Configure GPIO pins
     gpio_reset_pin(PIN_LORA_RST);
-    gpio_set_direction(PIN_LORA_RST, GPIO_MODE_OUTPUT);
-    gpio_set_level(PIN_LORA_RST, 1);
-
     gpio_reset_pin(PIN_LORA_NSS);
+    
+    gpio_set_direction(PIN_LORA_RST, GPIO_MODE_OUTPUT);
     gpio_set_direction(PIN_LORA_NSS, GPIO_MODE_OUTPUT);
+    
+    gpio_set_level(PIN_LORA_RST, 1);
     gpio_set_level(PIN_LORA_NSS, 1);
 
     // Configure DIO0 as input with interrupt
@@ -263,15 +259,9 @@ esp_err_t lora_init(void)
 
     // Hardware reset
     hardware_reset();
-
-    // Check chip version
-    uint8_t version;
-    int tries = 0;
-    while (tries++ < TIMEOUT_RESET) {
-        version = read_reg(REG_VERSION);
-        if (version == 0x12) break;
-        vTaskDelay(pdMS_TO_TICKS(2));
-    }
+    
+    // Read version register to verify chip is present
+    uint8_t version = read_reg(REG_VERSION);
 
     if (version != 0x12) {
         ESP_LOGE(TAG, "SX1278 not found (version=0x%02X, expected 0x12)", version);
@@ -293,9 +283,9 @@ esp_err_t lora_init(void)
     // DIO0 mapping: 00 = RxDone, 01 = TxDone
     write_reg(REG_DIO_MAPPING_1, DIO0_RX_DONE);
 
-    // Set initial TX power to medium for testing (safe with antenna)
-    lora_set_tx_power(TX_POWER_MED);
-    current_tx_power = TX_POWER_MED;
+    // Set initial TX power (low power for sensor package)
+    lora_set_tx_power(LORA_TX_POWER_LOW);
+    current_tx_power = LORA_TX_POWER_LOW;
 
     // Default settings
     lora_set_frequency(915000000);  // 915 MHz (US ISM band)
@@ -306,6 +296,25 @@ esp_err_t lora_init(void)
     lora_set_sync_word(LORA_SYNC_WORD);  // Use our network sync word
 
     lora_idle();
+    
+    // Verify chip is responding correctly with a write-read test
+    write_reg(REG_FIFO_ADDR_PTR, 0xAA);
+    write_reg(REG_FIFO_TX_BASE_ADDR, 0x55);
+    vTaskDelay(pdMS_TO_TICKS(1));
+    
+    uint8_t reg1_read = read_reg(REG_FIFO_ADDR_PTR);
+    uint8_t reg2_read = read_reg(REG_FIFO_TX_BASE_ADDR);
+    
+    if (reg1_read != 0xAA || reg2_read != 0x55) {
+        ESP_LOGE(TAG, "Register write-read test FAILED");
+        spi_bus_remove_device(spi_handle);
+        spi_bus_free(LORA_SPI_HOST);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    
+    // Reset registers to 0
+    write_reg(REG_FIFO_ADDR_PTR, 0);
+    write_reg(REG_FIFO_TX_BASE_ADDR, 0);
 
     // Reset status
     memset(&status, 0, sizeof(status));
@@ -324,24 +333,19 @@ bool lora_is_initialized(void)
 
 void lora_idle(void)
 {
+    if (!initialized) return;
     write_reg(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_STDBY);
-    // Wait for mode transition to complete
-    int retries = 0;
-    while ((read_reg(REG_OP_MODE) & 0x07) != MODE_STDBY && retries < 10) {
-        vTaskDelay(pdMS_TO_TICKS(1));
-        retries++;
-    }
 }
 
 void lora_sleep(void)
 {
+    if (!initialized) return;
     write_reg(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_SLEEP);
 }
 
 void lora_receive(void)
 {
-    // Go to standby first before changing DIO mapping
-    lora_idle();
+    if (!initialized) return;
     
     // Configure DIO0 for RxDone interrupt
     write_reg(REG_DIO_MAPPING_1, DIO0_RX_DONE);
@@ -363,40 +367,15 @@ void lora_set_frequency(long frequency)
     write_reg(REG_FRF_MSB, (uint8_t)(frf >> 16));
     write_reg(REG_FRF_MID, (uint8_t)(frf >> 8));
     write_reg(REG_FRF_LSB, (uint8_t)(frf >> 0));
-    
-    ESP_LOGI(TAG, "Frequency set to %ld Hz", frequency);
 }
 
 void lora_set_tx_power(int level)
 {
-    // PA config should be changed in standby mode
-    lora_idle();
+    if (level < 2) level = 2;
+    else if (level > 17) level = 17;
     
-    // Use RFO output (not PA_BOOST) for lower power levels
-    // RFO range: -4 to +14 dBm (MaxPower=0-7, OutputPower=0-15)
-    // PA_BOOST range: +2 to +17 dBm
-    
-    if (level <= 0) {
-        // Use RFO at minimum power for testing without antenna
-        // PA_CONFIG: PA_SELECT=0 (RFO), MaxPower=0, OutputPower=0 = -4 dBm
-        write_reg(REG_PA_CONFIG, 0x00);
-        ESP_LOGI(TAG, "TX power set to ~-4 dBm (RFO min)");
-        status.tx_power = -4;
-    } else if (level < 2) {
-        // RFO low power
-        write_reg(REG_PA_CONFIG, 0x70 | level);  // MaxPower=7, OutputPower=level
-        ESP_LOGI(TAG, "TX power set to ~%d dBm (RFO)", level);
-        status.tx_power = level;
-    } else {
-        // PA_BOOST for +2 to +17 dBm
-        if (level > 17) level = 17;
-        write_reg(REG_PA_CONFIG, PA_BOOST | (level - 2));
-        ESP_LOGI(TAG, "TX power set to %d dBm (PA_BOOST)", level);
-        status.tx_power = level;
-    }
-    
-    // Small delay to let PA stabilize
-    vTaskDelay(pdMS_TO_TICKS(5));
+    write_reg(REG_PA_CONFIG, PA_BOOST | (level - 2));
+    status.tx_power = level;
 }
 
 void lora_set_spreading_factor(int sf)
@@ -467,73 +446,59 @@ esp_err_t lora_send_packet(const uint8_t *buf, int size)
         return ESP_ERR_INVALID_SIZE;
     }
 
-    // Go to standby mode first and wait for mode change
+    // Put chip in standby mode before TX
     lora_idle();
-    vTaskDelay(pdMS_TO_TICKS(10));  // Wait for mode transition
+    vTaskDelay(pdMS_TO_TICKS(5));
     
-    // Debug: Print modem config before TX
-    uint8_t config1 = read_reg(REG_MODEM_CONFIG_1);
-    uint8_t config2 = read_reg(REG_MODEM_CONFIG_2);
-    uint8_t sync = read_reg(REG_SYNC_WORD);
-    ESP_LOGI(TAG, "TX Config: MC1=0x%02X, MC2=0x%02X, Sync=0x%02X, CRC=%s", 
-             config1, config2, sync, (config2 & 0x04) ? "ON" : "OFF");
+    // Configure DIO0 for TX Done interrupt
+    write_reg(REG_DIO_MAPPING_1, DIO0_TX_DONE);
     
-    // Clear all IRQ flags before TX
+    // Clear any pending IRQ flags and reset interrupt flag
     write_reg(REG_IRQ_FLAGS, 0xFF);
-    write_reg(REG_IRQ_FLAGS, 0xFF);
+    rx_done_flag = false;
     
-    // Reset FIFO pointers
-    write_reg(REG_FIFO_TX_BASE_ADDR, 0);
     write_reg(REG_FIFO_ADDR_PTR, 0);
 
-    // Write data to FIFO one byte at a time
+    // Write data to FIFO
     for (int i = 0; i < size; i++) {
         write_reg(REG_FIFO, buf[i]);
     }
     write_reg(REG_PAYLOAD_LENGTH, size);
-    
-    // Verify FIFO pointer advanced correctly
-    uint8_t fifo_ptr = read_reg(REG_FIFO_ADDR_PTR);
-    if (fifo_ptr != size) {
-        ESP_LOGE(TAG, "FIFO write error: ptr=%d, expected=%d", fifo_ptr, size);
-    }
-
-    // Verify we're in standby before TX
-    uint8_t mode_before = read_reg(REG_OP_MODE);
-    uint8_t irq_before = read_reg(REG_IRQ_FLAGS);
-    ESP_LOGD(TAG, "TX %d bytes: OpMode=0x%02X, IRQ=0x%02X, FIFO=%d", size, mode_before, irq_before, fifo_ptr);
 
     // Start transmission
     write_reg(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_TX);
 
-    // Wait for TX done
-    int64_t start_time = esp_timer_get_time();
+    // Wait for TX done using hardware DIO0 pin
     int timeout = 0;
-    while ((read_reg(REG_IRQ_FLAGS) & IRQ_TX_DONE_MASK) == 0) {
-        vTaskDelay(pdMS_TO_TICKS(10));
-        timeout++;
-        
-        if (timeout > 200) {  // 2 second timeout (200 * 10ms)
-            uint8_t irq_flags = read_reg(REG_IRQ_FLAGS);
-            uint8_t op_mode = read_reg(REG_OP_MODE);
-            int elapsed_ms = (int)((esp_timer_get_time() - start_time) / 1000);
-            ESP_LOGE(TAG, "TX timeout after %dms - IRQ: 0x%02X, OpMode: 0x%02X", 
-                     elapsed_ms, irq_flags, op_mode);
+    while (!rx_done_flag && gpio_get_level(PIN_LORA_DIO0) == 0) {
+        vTaskDelay(pdMS_TO_TICKS(2));
+        if (++timeout > 500) {  // 1 second timeout
+            ESP_LOGE(TAG, "TX timeout");
             lora_idle();
+            write_reg(REG_DIO_MAPPING_1, DIO0_RX_DONE);
             return ESP_ERR_TIMEOUT;
         }
     }
-    
-    int elapsed_ms = (int)((esp_timer_get_time() - start_time) / 1000);
-    ESP_LOGD(TAG, "TX done in %dms (%d bytes)", elapsed_ms, size);
+
+    // Verify TX completed
+    uint8_t irq_flags = read_reg(REG_IRQ_FLAGS);
+    if ((irq_flags & IRQ_TX_DONE_MASK) == 0) {
+        ESP_LOGE(TAG, "TX failed - IRQ_TX_DONE not set");
+        lora_idle();
+        write_reg(REG_DIO_MAPPING_1, DIO0_RX_DONE);
+        return ESP_ERR_INVALID_STATE;
+    }
 
     // Clear IRQ
     write_reg(REG_IRQ_FLAGS, IRQ_TX_DONE_MASK);
     
-    // Return to standby mode - CRITICAL! Without this, subsequent TX will fail
+    // Return to standby and restore DIO0 for RX
     lora_idle();
+    write_reg(REG_DIO_MAPPING_1, DIO0_RX_DONE);
+    rx_done_flag = false;
     
     status.packets_sent++;
+
     return ESP_OK;
 }
 
@@ -671,12 +636,12 @@ void lora_run_diagnostics(void)
         return;
     }
     
-    // 1. Check chip version
+    // Check chip version
     uint8_t version = read_reg(REG_VERSION);
     ESP_LOGI(TAG, "Chip version: 0x%02X %s", version, 
-             (version == 0x12) ? "(OK - SX1278)" : "(UNEXPECTED!)");
+             (version == 0x12) ? "(OK)" : "(UNEXPECTED!)");
     
-    // 2. Check operating mode
+    // Check operating mode
     uint8_t op_mode = read_reg(REG_OP_MODE);
     const char *mode_str = "Unknown";
     uint8_t mode = op_mode & 0x07;
@@ -687,69 +652,44 @@ void lora_run_diagnostics(void)
         case MODE_RX_CONTINUOUS:  mode_str = "RX Continuous"; break;
         case MODE_RX_SINGLE:      mode_str = "RX Single"; break;
     }
-    ESP_LOGI(TAG, "OpMode: 0x%02X (%s, LoRa=%s)", op_mode, mode_str,
-             (op_mode & MODE_LONG_RANGE_MODE) ? "Yes" : "No");
+    ESP_LOGI(TAG, "OpMode: 0x%02X (%s)", op_mode, mode_str);
     
-    // 3. Read frequency configuration
+    // Read frequency configuration
     uint8_t freq_msb = read_reg(REG_FRF_MSB);
     uint8_t freq_mid = read_reg(REG_FRF_MID);
     uint8_t freq_lsb = read_reg(REG_FRF_LSB);
     uint32_t freq_raw = ((uint32_t)freq_msb << 16) | ((uint32_t)freq_mid << 8) | freq_lsb;
     float freq_mhz = (float)freq_raw * 32.0f / (float)(1 << 19);
-    ESP_LOGI(TAG, "Frequency: %.2f MHz (reg=0x%06lX)", freq_mhz, (unsigned long)freq_raw);
+    ESP_LOGI(TAG, "Frequency: %.2f MHz", freq_mhz);
     
-    // 4. Check PA configuration
+    // Check PA configuration
     uint8_t pa_config = read_reg(REG_PA_CONFIG);
     int tx_power = (pa_config & 0x0F) + 2;
-    if (pa_config & PA_BOOST) tx_power += 1;  // PA_BOOST adds ~1dB
-    ESP_LOGI(TAG, "PA Config: 0x%02X (PA_BOOST=%s, power ~%d dBm)", 
-             pa_config, (pa_config & PA_BOOST) ? "Yes" : "No", tx_power);
+    ESP_LOGI(TAG, "TX Power: %d dBm", tx_power);
     
-    // 5. Check modem configuration
+    // Check modem configuration
     uint8_t config1 = read_reg(REG_MODEM_CONFIG_1);
     uint8_t config2 = read_reg(REG_MODEM_CONFIG_2);
     int sf = (config2 >> 4) & 0x0F;
     int bw = (config1 >> 4) & 0x0F;
-    int cr = (config1 >> 1) & 0x07;
     const char *bw_str[] = {"7.8", "10.4", "15.6", "20.8", "31.25", "41.7", "62.5", "125", "250", "500"};
-    ESP_LOGI(TAG, "Modem: SF%d, BW=%s kHz, CR=4/%d, CRC=%s", 
-             sf, (bw < 10) ? bw_str[bw] : "???", cr + 4,
+    ESP_LOGI(TAG, "Modem: SF%d, BW=%s kHz, CRC=%s", 
+             sf, (bw < 10) ? bw_str[bw] : "???",
              (config2 & 0x04) ? "On" : "Off");
     
-    // 6. Read RSSI (noise floor test)
-    ESP_LOGI(TAG, "Testing noise floor (entering RX mode)...");
+    // Test noise floor
     lora_receive();
-    vTaskDelay(pdMS_TO_TICKS(500));  // Let receiver stabilize
+    vTaskDelay(pdMS_TO_TICKS(100));
     
-    // Sample RSSI multiple times
-    int rssi_samples[10];
-    int rssi_min = 0, rssi_max = -200, rssi_sum = 0;
-    for (int i = 0; i < 10; i++) {
-        // Read wideband RSSI (current RSSI, not packet RSSI)
+    int rssi_sum = 0;
+    for (int i = 0; i < 5; i++) {
         int raw_rssi = read_reg(REG_RSSI_WIDEBAND);
-        rssi_samples[i] = raw_rssi - 157;  // Convert to dBm (for HF bands)
-        if (rssi_samples[i] < rssi_min) rssi_min = rssi_samples[i];
-        if (rssi_samples[i] > rssi_max) rssi_max = rssi_samples[i];
-        rssi_sum += rssi_samples[i];
-        vTaskDelay(pdMS_TO_TICKS(50));
+        rssi_sum += raw_rssi - 157;
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
-    int rssi_avg = rssi_sum / 10;
+    int rssi_avg = rssi_sum / 5;
+    ESP_LOGI(TAG, "Noise floor: %d dBm", rssi_avg);
     
-    ESP_LOGI(TAG, "Noise floor RSSI: avg=%d dBm, min=%d, max=%d", 
-             rssi_avg, rssi_min, rssi_max);
-    
-    // Interpret results
-    if (rssi_avg < -110) {
-        ESP_LOGI(TAG, ">> Noise floor looks good (quiet environment)");
-    } else if (rssi_avg < -100) {
-        ESP_LOGI(TAG, ">> Moderate noise floor (some interference)");
-    } else if (rssi_avg < -90) {
-        ESP_LOGW(TAG, ">> High noise floor (significant interference)");
-    } else {
-        ESP_LOGW(TAG, ">> Very high noise! Check antenna/environment");
-    }
-    
-    // Return to idle
     lora_idle();
     
     ESP_LOGI(TAG, "========== Diagnostics Complete ==========");
@@ -904,7 +844,6 @@ void lora_set_ping_callback(lora_ping_cb_t callback)
 void lora_set_adaptive_power(bool enable)
 {
     adaptive_power_enabled = enable;
-    ESP_LOGI(TAG, "Adaptive power %s", enable ? "enabled" : "disabled");
 }
 
 uint8_t lora_get_suggested_power(void)
@@ -944,7 +883,7 @@ static void apply_adaptive_power(void)
     if (suggested != current_tx_power) {
         current_tx_power = suggested;
         lora_set_tx_power(current_tx_power);
-        ESP_LOGI(TAG, "Adaptive power: RSSI=%d -> TX=%d dBm", recent_rssi, current_tx_power);
+        ESP_LOGD(TAG, "Adaptive power: RSSI=%d -> TX=%d dBm", recent_rssi, current_tx_power);
     }
 }
 
@@ -994,7 +933,6 @@ bool lora_process_rx(void)
                 if (adaptive_power_enabled && ack->suggested_power != current_tx_power) {
                     current_tx_power = ack->suggested_power;
                     lora_set_tx_power(current_tx_power);
-                    ESP_LOGI(TAG, "Power adjusted to %d dBm (base suggestion)", current_tx_power);
                 }
                 ack_callback(ack);
             }
