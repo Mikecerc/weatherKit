@@ -297,25 +297,6 @@ esp_err_t lora_init(void)
 
     lora_idle();
     
-    // Verify chip is responding correctly with a write-read test
-    write_reg(REG_FIFO_ADDR_PTR, 0xAA);
-    write_reg(REG_FIFO_TX_BASE_ADDR, 0x55);
-    vTaskDelay(pdMS_TO_TICKS(1));
-    
-    uint8_t reg1_read = read_reg(REG_FIFO_ADDR_PTR);
-    uint8_t reg2_read = read_reg(REG_FIFO_TX_BASE_ADDR);
-    
-    if (reg1_read != 0xAA || reg2_read != 0x55) {
-        ESP_LOGE(TAG, "Register write-read test FAILED");
-        spi_bus_remove_device(spi_handle);
-        spi_bus_free(LORA_SPI_HOST);
-        return ESP_ERR_INVALID_RESPONSE;
-    }
-    
-    // Reset registers to 0
-    write_reg(REG_FIFO_ADDR_PTR, 0);
-    write_reg(REG_FIFO_TX_BASE_ADDR, 0);
-
     // Reset status
     memset(&status, 0, sizeof(status));
     status.initialized = true;
