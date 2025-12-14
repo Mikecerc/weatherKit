@@ -33,8 +33,8 @@
 // =============================================================================
 // Pressure sensor SPI (if using SPI mode)
 // =============================================================================
-#define PIN_PRESSURE_SPI_SCK    13
-#define PIN_PRESSURE_SPI_MOSI   12
+#define PIN_PRESSURE_SPI_SCK    10
+#define PIN_PRESSURE_SPI_MOSI   11
 
 
 // I2C Device Addresses
@@ -45,13 +45,12 @@
 // LoRa Module (RA-02 / SX1278) - SPI
 // Avoiding PSRAM GPIO 33-37
 // =============================================================================
-#define PIN_LORA_SCK        10      // SPI Clock
-#define PIN_LORA_MISO       2       // SPI Master In, Slave Out  
-#define PIN_LORA_MOSI       1       // SPI Master Out, Slave In
-#define PIN_LORA_NSS        7       // Chip Select (active low)
-#define PIN_LORA_RST        3       // Reset (active low)
-#define PIN_LORA_DIO0       5       // Interrupt: RX done, TX done, CAD done
-#define PIN_LORA_DIO1       4       // Interrupt: RX timeout (optional)
+#define PIN_LORA_SCK        5      // SPI Clock
+#define PIN_LORA_MISO       4       // SPI Master In, Slave Out  
+#define PIN_LORA_MOSI       13       // SPI Master Out, Slave In
+#define PIN_LORA_NSS        12       // Chip Select (active low)
+#define PIN_LORA_RST        2       // Reset (active low)
+#define PIN_LORA_DIO0       1       // Interrupt: RX done, TX done, CAD done
 // DIO2-DIO5 optional, directly on SX1278 chip (under metal shield on RA-02)
 
 // SPI Configuration for LoRa
