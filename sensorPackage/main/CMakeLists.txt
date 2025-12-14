@@ -7,7 +7,7 @@ idf_component_register(
         "drivers/i2c_init.c"      
         "drivers/lightning_driver.c"
         "drivers/pressure_driver.c"
-        "drivers/temp_humidity_driver.c"
+        "drivers/ah20.c"
     INCLUDE_DIRS 
         "."
         "drivers"

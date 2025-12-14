@@ -11,7 +11,7 @@
 #include "drivers/lora_protocol.h"
 #include "drivers/led.h"
 #include "drivers/i2c_init.h"
-#include "drivers/temp_humidity_driver.h"
+#include "drivers/ah20.h"
 #include "drivers/pressure_driver.h"
 #include "drivers/lightning_driver.h"
 #include "pinout.h"
@@ -645,6 +645,8 @@ esp_err_t sensor_routine_init(const sensor_config_t *config)
     
     ESP_LOGI(TAG, "Sensor routine initialized (interval=%ds, heartbeat=%ds)",
              current_config.update_interval_sec, current_config.heartbeat_interval_sec);
+    // Start a one-shot I2C diagnostic task to log low-level transactions
+    start_i2c_diag();
     
     return ESP_OK;
 }

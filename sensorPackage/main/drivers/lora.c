@@ -21,6 +21,7 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include <string.h>
+#include "esp_timer.h"
 
 static const char *TAG = "lora";
 
@@ -297,6 +298,28 @@ esp_err_t lora_init(void)
 
     lora_idle();
     
+        // Verify chip is responding correctly with a write-read test
+    write_reg(REG_FIFO_ADDR_PTR, 0xAA);
+    write_reg(REG_FIFO_TX_BASE_ADDR, 0x55);
+    vTaskDelay(pdMS_TO_TICKS(1));
+    
+    uint8_t reg1_read = read_reg(REG_FIFO_ADDR_PTR);
+    uint8_t reg2_read = read_reg(REG_FIFO_TX_BASE_ADDR);
+    
+    if (reg1_read != 0xAA || reg2_read != 0x55) {
+        ESP_LOGE(TAG, "Register write-read test FAILED");
+        spi_bus_remove_device(spi_handle);
+        spi_bus_free(LORA_SPI_HOST);
+        return ESP_ERR_INVALID_RESPONSE;
+    } else {
+        ESP_LOGI(TAG, "Register write-read test PASSED");
+    }
+    
+    // Reset registers to 0
+    write_reg(REG_FIFO_ADDR_PTR, 0);
+    write_reg(REG_FIFO_TX_BASE_ADDR, 0);
+
+
     // Reset status
     memset(&status, 0, sizeof(status));
     status.initialized = true;
@@ -314,18 +337,25 @@ bool lora_is_initialized(void)
 
 void lora_idle(void)
 {
-    if (!initialized) return;
     write_reg(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_STDBY);
+
+     // Wait for mode transition to complete
+    int retries = 0;
+    while ((read_reg(REG_OP_MODE) & 0x07) != MODE_STDBY && retries < 10) {
+        vTaskDelay(pdMS_TO_TICKS(1));
+        retries++;
+    }
 }
 
 void lora_sleep(void)
 {
-    if (!initialized) return;
     write_reg(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_SLEEP);
 }
 
 void lora_receive(void)
 {
+    
+    lora_idle();
     if (!initialized) return;
     
     // Configure DIO0 for RxDone interrupt
@@ -352,11 +382,34 @@ void lora_set_frequency(long frequency)
 
 void lora_set_tx_power(int level)
 {
-    if (level < 2) level = 2;
-    else if (level > 17) level = 17;
+     // PA config should be changed in standby mode
+    lora_idle();
     
-    write_reg(REG_PA_CONFIG, PA_BOOST | (level - 2));
-    status.tx_power = level;
+    // Use RFO output (not PA_BOOST) for lower power levels
+    // RFO range: -4 to +14 dBm (MaxPower=0-7, OutputPower=0-15)
+    // PA_BOOST range: +2 to +17 dBm
+    
+    if (level <= 0) {
+        // Use RFO at minimum power for testing without antenna
+        // PA_CONFIG: PA_SELECT=0 (RFO), MaxPower=0, OutputPower=0 = -4 dBm
+        write_reg(REG_PA_CONFIG, 0x00);
+        ESP_LOGI(TAG, "TX power set to ~-4 dBm (RFO min)");
+        status.tx_power = -4;
+    } else if (level < 2) {
+        // RFO low power
+        write_reg(REG_PA_CONFIG, 0x70 | level);  // MaxPower=7, OutputPower=level
+        ESP_LOGI(TAG, "TX power set to ~%d dBm (RFO)", level);
+        status.tx_power = level;
+    } else {
+        // PA_BOOST for +2 to +17 dBm
+        if (level > 17) level = 17;
+        write_reg(REG_PA_CONFIG, PA_BOOST | (level - 2));
+        ESP_LOGI(TAG, "TX power set to %d dBm (PA_BOOST)", level);
+        status.tx_power = level;
+    }
+    
+    // Small delay to let PA stabilize
+    vTaskDelay(pdMS_TO_TICKS(5));
 }
 
 void lora_set_spreading_factor(int sf)
@@ -429,7 +482,7 @@ esp_err_t lora_send_packet(const uint8_t *buf, int size)
 
     // Put chip in standby mode before TX
     lora_idle();
-    vTaskDelay(pdMS_TO_TICKS(5));
+    vTaskDelay(pdMS_TO_TICKS(10));
     
     // Configure DIO0 for TX Done interrupt
     write_reg(REG_DIO_MAPPING_1, DIO0_TX_DONE);
@@ -439,6 +492,7 @@ esp_err_t lora_send_packet(const uint8_t *buf, int size)
     rx_done_flag = false;
     
     write_reg(REG_FIFO_ADDR_PTR, 0);
+    write_reg(REG_FIFO_TX_BASE_ADDR, 0);
 
     // Write data to FIFO
     for (int i = 0; i < size; i++) {
@@ -446,10 +500,24 @@ esp_err_t lora_send_packet(const uint8_t *buf, int size)
     }
     write_reg(REG_PAYLOAD_LENGTH, size);
 
+
+    // Verify FIFO pointer advanced correctly
+    uint8_t fifo_ptr = read_reg(REG_FIFO_ADDR_PTR);
+    if (fifo_ptr != size) {
+        ESP_LOGE(TAG, "FIFO write error: ptr=%d, expected=%d", fifo_ptr, size);
+    }
+
+    // Verify we're in standby before TX
+    uint8_t mode_before = read_reg(REG_OP_MODE);
+    uint8_t irq_before = read_reg(REG_IRQ_FLAGS);
+    ESP_LOGD(TAG, "TX %d bytes: OpMode=0x%02X, IRQ=0x%02X, FIFO=%d", size, mode_before, irq_before, fifo_ptr);
+
+
     // Start transmission
     write_reg(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_TX);
-
-    // Wait for TX done using hardware DIO0 pin
+    
+    /**
+     // Wait for TX done using hardware DIO0 pin
     int timeout = 0;
     while (!rx_done_flag && gpio_get_level(PIN_LORA_DIO0) == 0) {
         vTaskDelay(pdMS_TO_TICKS(2));
@@ -469,6 +537,28 @@ esp_err_t lora_send_packet(const uint8_t *buf, int size)
         write_reg(REG_DIO_MAPPING_1, DIO0_RX_DONE);
         return ESP_ERR_INVALID_STATE;
     }
+    */
+    /** */
+    // Wait for TX done
+    int64_t start_time = esp_timer_get_time();
+    int timeout = 0;
+    while ((read_reg(REG_IRQ_FLAGS) & IRQ_TX_DONE_MASK) == 0) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+        timeout++;
+        
+        if (timeout > 200) {  // 2 second timeout (200 * 10ms)
+            uint8_t irq_flags = read_reg(REG_IRQ_FLAGS);
+            uint8_t op_mode = read_reg(REG_OP_MODE);
+            int elapsed_ms = (int)((esp_timer_get_time() - start_time) / 1000);
+            ESP_LOGE(TAG, "TX timeout after %dms - IRQ: 0x%02X, OpMode: 0x%02X", 
+                     elapsed_ms, irq_flags, op_mode);
+            lora_idle();
+            return ESP_ERR_TIMEOUT;
+        }
+    }
+    
+    int elapsed_ms = (int)((esp_timer_get_time() - start_time) / 1000);
+    ESP_LOGD(TAG, "TX done in %dms (%d bytes)", elapsed_ms, size);
 
     // Clear IRQ
     write_reg(REG_IRQ_FLAGS, IRQ_TX_DONE_MASK);

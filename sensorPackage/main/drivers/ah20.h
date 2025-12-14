@@ -1,13 +1,13 @@
 /**
- * @file temp_humidity_driver.h
+ * @file ah20.h
  * @brief AHT20 temperature and humidity sensor driver
  * 
  * I2C-based temperature and humidity sensor
  * Provides high accuracy environmental measurements
  */
 
-#ifndef TEMP_HUMIDITY_DRIVER_H
-#define TEMP_HUMIDITY_DRIVER_H
+#ifndef AH20_H
+#define AH20_H
 
 #include "esp_err.h"
 #include <stdbool.h>
