@@ -57,7 +57,7 @@
 // LoRa Module (RA-02 / SX1278) - SPI
 // Avoiding PSRAM GPIO 33-37
 // =============================================================================
-#define PIN_LORA_SCK        3       // SPI Clock
+#define PIN_LORA_SCK        5      // SPI Clock
 #define PIN_LORA_MISO       4       // SPI Master In, Slave Out  
 #define PIN_LORA_MOSI       13      // SPI Master Out, Slave In
 #define PIN_LORA_NSS        12      // Chip Select (active low)
