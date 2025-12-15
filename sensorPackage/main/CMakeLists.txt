@@ -7,9 +7,9 @@ idf_component_register(
         "drivers/i2c_init.c"      
         "drivers/lightning_driver.c"
         "drivers/pressure_driver.c"
-        "drivers/ah20.c"
+        "drivers/aht20_wrapper.c"
     INCLUDE_DIRS 
         "."
         "drivers"
-    REQUIRES driver esp_timer nvs_flash
+    REQUIRES driver esp_timer nvs_flash aht20
 )

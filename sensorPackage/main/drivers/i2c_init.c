@@ -82,7 +82,7 @@ esp_err_t i2c_bus_recover(void)
     return err;
 }
 
-void i2c_bus_scan(void)
+void i2c_bus_log_scan(void)
 {
     if (!i2c_initialized) {
         ESP_LOGW(TAG, "I2C bus not initialized, cannot scan");

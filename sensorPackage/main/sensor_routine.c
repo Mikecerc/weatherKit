@@ -11,7 +11,7 @@
 #include "drivers/lora_protocol.h"
 #include "drivers/led.h"
 #include "drivers/i2c_init.h"
-#include "drivers/ah20.h"
+#include "drivers/aht20_wrapper.h"
 #include "drivers/pressure_driver.h"
 #include "drivers/lightning_driver.h"
 #include "pinout.h"
@@ -581,7 +581,7 @@ esp_err_t sensor_routine_init(const sensor_config_t *config)
         }
         
         // Scan I2C bus to see what's connected
-        i2c_bus_scan();
+    i2c_bus_log_scan();
         
         // Initialize AHT20 temperature/humidity sensor
         err = aht20_init();
@@ -590,6 +590,7 @@ esp_err_t sensor_routine_init(const sensor_config_t *config)
             sensor_error_flags |= ERR_TEMP_SENSOR | ERR_HUMIDITY_SENSOR;
             // Continue - we can still try to use the other sensors
         }
+    
         
         // Initialize HX710B pressure sensor
         err = hx710b_init();
@@ -598,27 +599,10 @@ esp_err_t sensor_routine_init(const sensor_config_t *config)
             sensor_error_flags |= ERR_PRESSURE_SENSOR;
             // Continue - we can still try to use the other sensors
         }
+        /*
         
-        // Initialize AS3935 lightning sensor
-        as3935_config_t lightning_config = AS3935_CONFIG_DEFAULT();
-        lightning_config.indoor = false;  // Outdoor mode for weather station
-        err = as3935_init(&lightning_config);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to initialize AS3935: %s (sensor may be missing)", esp_err_to_name(err));
-            sensor_error_flags |= ERR_LIGHTNING_SENSOR;
-            // Recover I2C bus in case AS3935 failure left it in bad state
-            i2c_bus_recover();
-            // Re-initialize AHT20 since bus recovery invalidates device handles
-            err = aht20_reinit();
-            if (err != ESP_OK) {
-                ESP_LOGW(TAG, "Failed to reinit AHT20 after bus recovery: %s", esp_err_to_name(err));
-                sensor_error_flags |= ERR_HUMIDITY_SENSOR;
-            }
-            // Continue - we can still try to use the other sensors
-        }
-        
-        // Initialize lightning data accumulator
-        lightning_data_init(&accumulated_lightning);
+        */
+       
         
         ESP_LOGI(TAG, "Sensors initialized (error_flags=0x%02X)", sensor_error_flags);
     } else {
@@ -642,12 +626,12 @@ esp_err_t sensor_routine_init(const sensor_config_t *config)
         // Run diagnostics
         lora_run_diagnostics();
     }
-    
+
+     
     ESP_LOGI(TAG, "Sensor routine initialized (interval=%ds, heartbeat=%ds)",
              current_config.update_interval_sec, current_config.heartbeat_interval_sec);
-    // Start a one-shot I2C diagnostic task to log low-level transactions
-    start_i2c_diag();
     
+
     return ESP_OK;
 }
 

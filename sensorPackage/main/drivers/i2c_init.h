@@ -54,6 +54,6 @@ esp_err_t i2c_bus_recover(void);
  * 
  * Useful for debugging I2C connection issues
  */
-void i2c_bus_scan(void);
+void i2c_bus_log_scan(void);
 
 #endif // I2C_INIT_H

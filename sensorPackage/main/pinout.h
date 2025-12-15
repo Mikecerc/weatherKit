@@ -24,7 +24,7 @@
 // =============================================================================
 #define PIN_I2C_SDA         8
 #define PIN_I2C_SCL         9
-#define I2C_FREQ_HZ         400000
+#define I2C_FREQ_HZ         80000
 
 // =============================================================================
 // Pressure sensor SPI (if using SPI mode)
@@ -70,7 +70,7 @@
 
 // LoRa TX Power Levels (dBm)
 // SX1278 PA_BOOST range: +2 to +17 dBm (or +20 with PA_HP)
-#define LORA_TX_POWER_LOW   2       // +2 dBm - safe without antenna
+#define LORA_TX_POWER_LOW   15      // +15 dBm - higher power for testing
 #define LORA_TX_POWER_HIGH  17      // +17 dBm - requires antenna!
 
 // =============================================================================
