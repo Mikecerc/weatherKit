@@ -10,50 +10,32 @@
 
 static const char *TAG = "i2c_init";
 static bool i2c_initialized = false;
-static i2c_master_bus_handle_t i2c_bus_handle = NULL;
+static i2c_master_bus_handle_t s_bus_handle = NULL;
 
 esp_err_t i2c_bus_init(void)
 {
-    if (i2c_initialized) {
-        ESP_LOGW(TAG, "I2C bus already initialized");
-        return ESP_OK;
+    if (s_bus_handle != NULL) {
+        return ESP_OK; // Already initialized
     }
 
     i2c_master_bus_config_t bus_config = {
-        .i2c_port = I2C_NUM_0,
+        .i2c_port = -1, // Auto-select port
         .sda_io_num = PIN_I2C_SDA,
         .scl_io_num = PIN_I2C_SCL,
         .clk_source = I2C_CLK_SRC_DEFAULT,
         .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
+        .flags.enable_internal_pullup = 1,
     };
 
-    esp_err_t err = i2c_new_master_bus(&bus_config, &i2c_bus_handle);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to create I2C master bus: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    i2c_initialized = true;
-    ESP_LOGI(TAG, "I2C bus initialized (SDA=%d, SCL=%d)", PIN_I2C_SDA, PIN_I2C_SCL);
+    esp_err_t ret = i2c_new_master_bus(&bus_config, &s_bus_handle);
     
-    return ESP_OK;
-}
-
-esp_err_t i2c_bus_deinit(void)
-{
-    if (!i2c_initialized) {
-        return ESP_OK;
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "I2C Master Bus initialized successfully");
+    } else {
+        ESP_LOGE(TAG, "Failed to init I2C Master Bus: %s", esp_err_to_name(ret));
     }
 
-    esp_err_t err = i2c_del_master_bus(i2c_bus_handle);
-    if (err == ESP_OK) {
-        i2c_bus_handle = NULL;
-        i2c_initialized = false;
-        ESP_LOGI(TAG, "I2C bus deinitialized");
-    }
-    
-    return err;
+    return ret;
 }
 
 bool i2c_bus_is_initialized(void)
@@ -63,24 +45,9 @@ bool i2c_bus_is_initialized(void)
 
 i2c_master_bus_handle_t i2c_bus_get_handle(void)
 {
-    return i2c_bus_handle;
+    return s_bus_handle;
 }
 
-esp_err_t i2c_bus_recover(void)
-{
-    if (!i2c_initialized || !i2c_bus_handle) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    
-    ESP_LOGI(TAG, "Attempting I2C bus recovery...");
-    esp_err_t err = i2c_master_bus_reset(i2c_bus_handle);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "I2C bus recovery failed: %s", esp_err_to_name(err));
-    } else {
-        ESP_LOGI(TAG, "I2C bus recovery successful");
-    }
-    return err;
-}
 
 void i2c_bus_log_scan(void)
 {
@@ -108,7 +75,7 @@ void i2c_bus_log_scan(void)
             }
             
             // Probe for device at this address
-            esp_err_t ret = i2c_master_probe(i2c_bus_handle, addr, 50);
+            esp_err_t ret = i2c_master_probe(s_bus_handle, addr, 50);
             
             if (ret == ESP_OK) {
                 pos += sprintf(line + pos, "%02X ", addr);

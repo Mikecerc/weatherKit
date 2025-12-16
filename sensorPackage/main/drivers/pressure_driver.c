@@ -152,7 +152,7 @@ esp_err_t hx710b_read(hx710b_data_t *data)
     data->raw_value = value;
     
     // Log raw value for debugging/calibration
-    ESP_LOGI(TAG, "Raw ADC value: %ld", (long)value);
+   // ESP_LOGI(TAG, "Raw ADC value: %ld", (long)value);
     
     // Convert raw ADC to gauge pressure (kPa)
     // voltage = raw / 16777215 * 3.3V
@@ -182,8 +182,7 @@ esp_err_t hx710b_read(hx710b_data_t *data)
     data->pressure_hpa = pressure;
     data->valid = true;
     
-    ESP_LOGI(TAG, "Pressure=%.2f hPa (raw=%ld, gauge=%.2f kPa)", 
-             pressure, (long)value, gauge_kpa);
+  //  ESP_LOGI(TAG, "Pressure=%.2f hPa (raw=%ld, gauge=%.2f kPa)", pressure, (long)value, gauge_kpa);
     
     return ESP_OK;
 }

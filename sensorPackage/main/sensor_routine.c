@@ -11,7 +11,7 @@
 #include "drivers/lora_protocol.h"
 #include "drivers/led.h"
 #include "drivers/i2c_init.h"
-#include "drivers/aht20_wrapper.h"
+#include "drivers/aht20.h"
 #include "drivers/pressure_driver.h"
 #include "drivers/lightning_driver.h"
 #include "pinout.h"
@@ -313,7 +313,7 @@ static void read_real_weather_data(weather_payload_t *weather)
     if (err == ESP_OK && aht20_data.valid) {
         temperature = aht20_data.temperature_c;
         humidity = aht20_data.humidity_rh;
-        ESP_LOGI(TAG, "AHT20: T=%.2f°C, RH=%.2f%%", temperature, humidity);
+      //  ESP_LOGI(TAG, "AHT20: T=%.2f°C, RH=%.2f%%", temperature, humidity);
     } else {
         ESP_LOGE(TAG, "AHT20 read failed: %s - sending 0 values", esp_err_to_name(err));
         sensor_error_flags |= ERR_TEMP_SENSOR | ERR_HUMIDITY_SENSOR;
@@ -325,7 +325,7 @@ static void read_real_weather_data(weather_payload_t *weather)
     err = hx710b_read(&hx710b_data);
     if (err == ESP_OK && hx710b_data.valid) {
         pressure = hx710b_data.pressure_hpa;
-        ESP_LOGI(TAG, "HX710B: P=%.2f hPa", pressure);
+       // ESP_LOGI(TAG, "HX710B: P=%.2f hPa", pressure);
     } else {
         ESP_LOGE(TAG, "HX710B read failed: %s - sending 0 value", esp_err_to_name(err));
         sensor_error_flags |= ERR_PRESSURE_SENSOR;

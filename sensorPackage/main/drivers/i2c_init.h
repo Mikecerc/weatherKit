@@ -19,12 +19,6 @@
  */
 esp_err_t i2c_bus_init(void);
 
-/**
- * @brief Deinitialize the I2C bus
- * 
- * @return ESP_OK on success, error code otherwise
- */
-esp_err_t i2c_bus_deinit(void);
 
 /**
  * @brief Check if I2C bus is initialized
@@ -40,14 +34,6 @@ bool i2c_bus_is_initialized(void);
  */
 i2c_master_bus_handle_t i2c_bus_get_handle(void);
 
-/**
- * @brief Recover the I2C bus after communication errors
- * 
- * Resets the I2C bus to clear any stuck states
- * 
- * @return ESP_OK on success, error code otherwise
- */
-esp_err_t i2c_bus_recover(void);
 
 /**
  * @brief Scan the I2C bus and log all detected devices
