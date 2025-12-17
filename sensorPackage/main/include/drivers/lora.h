@@ -250,6 +250,14 @@ esp_err_t lora_send_weather(const weather_payload_t *weather);
 esp_err_t lora_send_config_ack(uint8_t config_seq, uint8_t applied_flags);
 
 /**
+ * @brief Send weather ACK-ACK to confirm lightning data was cleared
+ * @param acked_seq Sequence number of the weather packet being confirmed
+ * @param lightning_total Total lightning count after clearing (for base to sync)
+ * @return ESP_OK on success
+ */
+esp_err_t lora_send_weather_ack_ack(uint8_t acked_seq, uint32_t lightning_total);
+
+/**
  * @brief Send status/heartbeat to base station (for remote sensor)
  * @param status Pointer to status payload
  * @return ESP_OK on success
@@ -281,6 +289,12 @@ void lora_set_weather_ack_callback(lora_weather_ack_cb_t callback);
  * @param enable true to automatically adjust power based on link quality
  */
 void lora_set_adaptive_power(bool enable);
+
+/**
+ * @brief Enable/disable high power mode
+ * @param enable true to allow TX power above 2dBm (up to 17dBm)
+ */
+void lora_set_high_power(bool enable);
 
 /**
  * @brief Get suggested TX power based on recent link quality

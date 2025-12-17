@@ -23,6 +23,25 @@ static QueueHandle_t weather_queue = NULL;
 static TickType_t last_sensor_data_time = 0;
 #define SENSOR_TIMEOUT_MS       60000   // Consider sensor disconnected after 60s
 
+// Track last processed lightning data to prevent double-counting
+// We track two things:
+// 1. last_processed_lightning_total - what we've recorded to storm tracker
+// 2. pending_lightning - data waiting for ACK-ACK confirmation
+static uint32_t last_confirmed_lightning_total = 0;  // Confirmed via ACK-ACK
+static uint32_t pending_lightning_total = 0;         // Waiting for ACK-ACK
+static uint8_t pending_lightning_count = 0;          // Strikes waiting to record
+static float pending_lightning_closest = -1.0f;      // Closest distance for pending strikes
+
+// ACK-ACK retry mechanism
+// If we send WEATHER_ACK but don't receive ACK-ACK, resend the ACK
+static uint8_t pending_ack_sequence = 0;             // Sequence we're waiting ACK-ACK for
+static uint8_t pending_ack_src_id = 0;               // Device we sent ACK to
+static TickType_t pending_ack_sent_time = 0;         // When we sent the ACK
+static bool pending_ack_waiting = false;             // Are we waiting for ACK-ACK?
+#define ACK_ACK_TIMEOUT_MS      2000                 // Resend ACK after 2 seconds
+#define ACK_ACK_MAX_RETRIES     3                    // Give up after 3 retries
+static uint8_t pending_ack_retries = 0;              // Current retry count
+
 /**
  * @brief Button event callback - runs in button task context, keep minimal!
  * 
@@ -120,38 +139,73 @@ static void on_weather_received(uint8_t src_id, const weather_payload_t *data, i
         
         // Sensor configuration echo
         .sensor_update_interval = data->config.update_interval,
-        .sensor_tx_power = data->config.tx_power,
+        .sensor_tx_power = data->config.tx_power,       // Sensor's TX power (what sensor uses to send)
         .sensor_high_power = (data->config.flags & CFG_HIGH_POWER) != 0,
         .sensor_adaptive_power = (data->config.flags & CFG_ADAPTIVE_POWER) != 0,
-        .sensor_rssi = data->last_base_rssi,
+        .sensor_rssi = data->last_base_rssi,            // RSSI sensor saw from base
         .sensor_uptime_sec = data->uptime_sec,
         
         // Base station link quality
-        .base_rssi = rssi,
-        .base_tx_power = data->sensor_tx_power,
+        .base_rssi = rssi,                              // RSSI base saw from sensor
+        .base_tx_power = 0,                             // Will be set from lora_get_status
         
         // Timing
         .last_rx_time_ms = (uint32_t)(esp_timer_get_time() / 1000)
     };
     
-    // Process lightning data
-    if (data->lightning.strikes_since_ack > 0) {
-        // Find the closest strike
+    // Get base TX power from lora status
+    lora_status_t lora_st;
+    lora_get_status(&lora_st);
+    weather.base_tx_power = lora_st.tx_power;
+    
+    // Process lightning data - DON'T record yet, wait for ACK-ACK confirmation
+    // This prevents double-counting if sensor misses our ACK and resends data
+    // We cache the pending data and record it when ACK-ACK confirms deletion
+    uint32_t new_strikes = 0;
+    if (data->lightning.total_count > last_confirmed_lightning_total) {
+        new_strikes = data->lightning.total_count - last_confirmed_lightning_total;
+        ESP_LOGI(TAG, "  Pending lightning: %lu strikes (confirmed %lu -> pending %lu)",
+                 (unsigned long)new_strikes,
+                 (unsigned long)last_confirmed_lightning_total,
+                 (unsigned long)data->lightning.total_count);
+        
+        // Cache pending lightning data - will be recorded when ACK-ACK received
+        pending_lightning_total = data->lightning.total_count;
+        pending_lightning_count = (uint8_t)(new_strikes > 255 ? 255 : new_strikes);
+        
+        // Find the closest strike for display and pending recording
+        uint8_t closest = lightning_data_closest(&data->lightning);
+        if (closest < 255) {
+            weather.lightning_dist = (float)closest;
+            pending_lightning_closest = (float)closest;
+        }
+        
+        ESP_LOGI(TAG, "    Cached %d strikes at closest distance: %.0f km (awaiting ACK-ACK)", 
+                 pending_lightning_count, pending_lightning_closest);
+    } else if (data->lightning.total_count > last_confirmed_lightning_total && 
+               data->lightning.total_count == pending_lightning_total) {
+        // Sensor is resending same pending data (missed our ACK)
+        // Just update display, keep existing pending data
         uint8_t closest = lightning_data_closest(&data->lightning);
         if (closest < 255) {
             weather.lightning_dist = (float)closest;
         }
-        
-        // Record strikes in storm tracker (only new strikes)
-        int count = (data->lightning.strikes_since_ack < MAX_LIGHTNING_STRIKES) ? 
-                    data->lightning.strikes_since_ack : MAX_LIGHTNING_STRIKES;
-        for (int i = 0; i < count; i++) {
-            if (data->lightning.distances[i] != 0xFF) {
-                storm_tracker_record_lightning((float)data->lightning.distances[i]);
-                ESP_LOGI(TAG, "  Lightning strike: %d km", data->lightning.distances[i]);
-            }
+        ESP_LOGD(TAG, "  Lightning data resent (awaiting ACK-ACK, pending=%lu)",
+                 (unsigned long)pending_lightning_total);
+    } else if (data->lightning.strikes_since_ack > 0) {
+        // Sensor has pending strikes but we've already confirmed them
+        // This shouldn't happen normally - sensor should have cleared after ACK-ACK
+        uint8_t closest = lightning_data_closest(&data->lightning);
+        if (closest < 255) {
+            weather.lightning_dist = (float)closest;
         }
+        ESP_LOGW(TAG, "  Unexpected: sensor has strikes but total=%lu <= confirmed=%lu",
+                 (unsigned long)data->lightning.total_count,
+                 (unsigned long)last_confirmed_lightning_total);
     }
+    
+    // Update weather.lightning_count to reflect only new strikes this packet
+    weather.lightning_count = (uint8_t)(new_strikes > 255 ? 255 : new_strikes);
     
     // Record weather in storm tracker
     storm_tracker_record_weather(weather.temperature, weather.humidity, weather.pressure);
@@ -183,6 +237,44 @@ static void on_status_received(uint8_t src_id, const status_payload_t *data, int
     
     // Update last received time (status counts as valid communication)
     last_sensor_data_time = xTaskGetTickCount();
+}
+
+/**
+ * @brief LoRa ACK-ACK callback - called when sensor confirms it cleared lightning data
+ * 
+ * This is the final step of the three-way handshake:
+ * 1. Sensor sends WEATHER_DATA with lightning strikes
+ * 2. Base sends WEATHER_ACK
+ * 3. Sensor clears lightning and sends WEATHER_ACK_ACK (this callback)
+ * 
+ * Only now do we record the lightning to storm tracker - we're certain
+ * the sensor won't resend the same data.
+ */
+static void on_weather_ack_ack_received(const weather_ack_ack_payload_t *data)
+{
+    ESP_LOGI(TAG, "ACK-ACK received: lightning_total=%lu (confirmed)", (unsigned long)data->lightning_total);
+    
+    // Verify this matches our pending data
+    if (data->lightning_total != pending_lightning_total) {
+        ESP_LOGW(TAG, "  ACK-ACK total mismatch: expected %lu, got %lu",
+                 (unsigned long)pending_lightning_total, (unsigned long)data->lightning_total);
+        // Still update confirmed total to stay in sync with sensor
+    }
+    
+    // Now safe to record the pending lightning to storm tracker
+    if (pending_lightning_count > 0 && pending_lightning_closest >= 0) {
+        for (uint8_t i = 0; i < pending_lightning_count; i++) {
+            storm_tracker_record_lightning(pending_lightning_closest);
+        }
+        ESP_LOGI(TAG, "  Recorded %d strikes at %.0f km to storm tracker", 
+                 pending_lightning_count, pending_lightning_closest);
+    }
+    
+    // Update confirmed total and clear pending data
+    last_confirmed_lightning_total = data->lightning_total;
+    pending_lightning_total = 0;
+    pending_lightning_count = 0;
+    pending_lightning_closest = -1.0f;
 }
 
 /**
@@ -362,6 +454,7 @@ void app_main(void)
         // Set up callbacks for received data
         lora_set_weather_callback(on_weather_received);
         lora_set_status_callback(on_status_received);
+        lora_set_weather_ack_ack_callback(on_weather_ack_ack_received);
         
         // Enable adaptive power - adjusts TX power based on link quality
         lora_set_adaptive_power(true);

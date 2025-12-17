@@ -31,22 +31,4 @@ void led_set_color(uint8_t red, uint8_t green, uint8_t blue);
  */
 void led_off(void);
 
-/**
- * @brief Set LED to indicate locate mode (blue)
- * @param enable true to enable locate indication
- */
-void led_set_locate(bool enable);
-
-/**
- * @brief Flash LED for locate function
- * @param duration_ms Duration to flash in milliseconds
- */
-void led_flash_locate(uint32_t duration_ms);
-
-/**
- * @brief Check if locate mode is active
- * @return true if locate LED is on
- */
-bool led_is_locate_active(void);
-
 #endif // LED_H

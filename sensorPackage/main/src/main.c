@@ -43,10 +43,17 @@ void app_main(void)
     
     ESP_LOGI(TAG, "NVS initialized");
     
+    // Configure sensor routine
+    // Set use_fake_data = false to use real sensors
+    sensor_config_t config = {
+        .update_interval_sec = 30,      // Send weather data every 30 seconds
+        .adaptive_power = true,         // Enable adaptive TX power
+        .high_power = false,            // Start with low power mode
+        .use_fake_data = false          // Use real sensor data
+    };
+    
     // Initialize sensor routine
-    // Config will be loaded from NVS flash (or defaults if no saved config)
-    // Pass NULL to use saved/default config instead of hardcoding values
-    ret = sensor_routine_init(NULL);
+    ret = sensor_routine_init(&config);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize sensor routine: %s", esp_err_to_name(ret));
         ESP_LOGE(TAG, "Check LoRa wiring: SCK=%d, MISO=%d, MOSI=%d, NSS=%d, RST=%d, DIO0=%d",
@@ -54,10 +61,6 @@ void app_main(void)
                  PIN_LORA_NSS, PIN_LORA_RST, PIN_LORA_DIO0);
         return;
     }
-    
-    // Get the loaded config for logging
-    sensor_config_t config;
-    sensor_routine_get_config(&config);
     
     // Start sensor routine
     ret = sensor_routine_start();

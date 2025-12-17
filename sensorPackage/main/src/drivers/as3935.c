@@ -3,7 +3,7 @@
  * @brief AS3935 Franklin Lightning Sensor driver implementation (new I2C API)
  */
 
-#include "lightning_driver.h"
+#include "as3935.h"
 #include "i2c_init.h"
 #include "pinout.h"
 #include "driver/i2c_master.h"

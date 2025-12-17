@@ -1,28 +1,27 @@
 /**
  * @file lora.c
- * @brief LoRa driver for SX1278/RA-02 module
+ * @brief LoRa driver for SX1278/RA-02 module (Sensor Package Version)
  * 
  * Based on Inteform/esp32-lora-library
  * https://github.com/Inteform/esp32-lora-library
  * 
- * Modified for WeatherKit:
+ * Modified for WeatherKit Sensor Package:
  * - Uses pinout.h for configuration
- * - Integrates with UI settings for power control
+ * - No UI dependencies (standalone sensor)
  * - Adds status tracking
  * - Interrupt-driven RX using DIO0
  */
 
 #include "lora.h"
 #include "pinout.h"
-#include "ui/ui.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 #include <string.h>
+#include "esp_timer.h"
 
 static const char *TAG = "lora";
 
@@ -75,7 +74,6 @@ static const char *TAG = "lora";
 
 // DIO0 mapping values (bits 7:6 of REG_DIO_MAPPING_1)
 #define DIO0_RX_DONE                   0x00  // DIO0 = RxDone
-#define DIO0_TX_DONE                   0x40  // DIO0 = TxDone
 
 #define TIMEOUT_RESET                  100
 
@@ -85,7 +83,7 @@ static const char *TAG = "lora";
 static spi_device_handle_t spi_handle = NULL;
 static bool initialized = false;
 static int implicit_header = 0;
-static long current_frequency = 433000000;  // Default 915 MHz
+static long current_frequency = 433000000;  // Default 433 MHz
 
 // Status tracking
 static lora_status_t status = {0};
@@ -96,6 +94,18 @@ static uint8_t tx_sequence = 0;
 // Interrupt-driven RX
 static SemaphoreHandle_t rx_semaphore = NULL;
 static volatile bool rx_done_flag = false;
+
+// Callbacks for received data (sensor package specific)
+static lora_config_cb_t config_callback = NULL;
+static lora_weather_ack_cb_t weather_ack_callback = NULL;
+
+// High power mode state
+static bool high_power_enabled = false;
+
+// Adaptive power state
+static bool adaptive_power_enabled = false;
+static int8_t recent_rssi = RSSI_POOR;  // Start with "excellent" to keep power low until we have real RSSI data
+static uint8_t current_tx_power = LORA_TX_POWER_LOW;
 
 // =============================================================================
 // Interrupt Handler
@@ -186,29 +196,26 @@ esp_err_t lora_init(void)
     esp_err_t ret;
 
     ESP_LOGI(TAG, "Initializing LoRa module...");
-    ESP_LOGI(TAG, "Pins: SCK=%d, MISO=%d, MOSI=%d, NSS=%d, RST=%d, DIO0=%d",
-             PIN_LORA_SCK, PIN_LORA_MISO, PIN_LORA_MOSI, 
-             PIN_LORA_NSS, PIN_LORA_RST, PIN_LORA_DIO0);
 
     // Configure GPIO pins
     gpio_reset_pin(PIN_LORA_RST);
-    gpio_set_direction(PIN_LORA_RST, GPIO_MODE_OUTPUT);
-    gpio_set_level(PIN_LORA_RST, 1);
-
     gpio_reset_pin(PIN_LORA_NSS);
+    
+    gpio_set_direction(PIN_LORA_RST, GPIO_MODE_OUTPUT);
     gpio_set_direction(PIN_LORA_NSS, GPIO_MODE_OUTPUT);
+    
+    gpio_set_level(PIN_LORA_RST, 1);
     gpio_set_level(PIN_LORA_NSS, 1);
 
     // Configure DIO0 as input with interrupt
     gpio_config_t dio0_config = {
         .pin_bit_mask = (1ULL << PIN_LORA_DIO0),
         .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_ENABLE,  // Pull low when idle, DIO0 goes high on RX done
+        .pull_up_en = GPIO_PULLDOWN_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_POSEDGE  // Interrupt on rising edge
     };
     gpio_config(&dio0_config);
-    ESP_LOGI(TAG, "DIO0 configured on GPIO %d with rising edge interrupt", PIN_LORA_DIO0);
 
     // Create semaphore for RX notification
     if (rx_semaphore == NULL) {
@@ -254,15 +261,9 @@ esp_err_t lora_init(void)
 
     // Hardware reset
     hardware_reset();
-
-    // Check chip version
-    uint8_t version;
-    int tries = 0;
-    while (tries++ < TIMEOUT_RESET) {
-        version = read_reg(REG_VERSION);
-        if (version == 0x12) break;
-        vTaskDelay(pdMS_TO_TICKS(2));
-    }
+    
+    // Read version register to verify chip is present
+    uint8_t version = read_reg(REG_VERSION);
 
     if (version != 0x12) {
         ESP_LOGE(TAG, "SX1278 not found (version=0x%02X, expected 0x12)", version);
@@ -284,8 +285,9 @@ esp_err_t lora_init(void)
     // DIO0 mapping: 00 = RxDone, 01 = TxDone
     write_reg(REG_DIO_MAPPING_1, DIO0_RX_DONE);
 
-    // Set initial TX power based on UI setting
-    lora_update_power();
+    // Set initial TX power (low power for sensor package)
+    lora_set_tx_power(LORA_TX_POWER_LOW);
+    current_tx_power = LORA_TX_POWER_LOW;
 
     // Default settings
     lora_set_frequency(433000000);  // 915 MHz (US ISM band)
@@ -296,10 +298,33 @@ esp_err_t lora_init(void)
     lora_set_sync_word(LORA_SYNC_WORD);  // Use our network sync word
 
     lora_idle();
+    
+        // Verify chip is responding correctly with a write-read test
+    write_reg(REG_FIFO_ADDR_PTR, 0xAA);
+    write_reg(REG_FIFO_TX_BASE_ADDR, 0x55);
+    vTaskDelay(pdMS_TO_TICKS(1));
+    
+    uint8_t reg1_read = read_reg(REG_FIFO_ADDR_PTR);
+    uint8_t reg2_read = read_reg(REG_FIFO_TX_BASE_ADDR);
+    
+    if (reg1_read != 0xAA || reg2_read != 0x55) {
+        ESP_LOGE(TAG, "Register write-read test FAILED");
+        spi_bus_remove_device(spi_handle);
+        spi_bus_free(LORA_SPI_HOST);
+        return ESP_ERR_INVALID_RESPONSE;
+    } else {
+        ESP_LOGI(TAG, "Register write-read test PASSED");
+    }
+    
+    // Reset registers to 0
+    write_reg(REG_FIFO_ADDR_PTR, 0);
+    write_reg(REG_FIFO_TX_BASE_ADDR, 0);
+
 
     // Reset status
     memset(&status, 0, sizeof(status));
     status.initialized = true;
+    status.tx_power = current_tx_power;
     initialized = true;
 
     ESP_LOGI(TAG, "LoRa module initialized successfully");
@@ -311,25 +336,16 @@ bool lora_is_initialized(void)
     return initialized;
 }
 
-void lora_debug_status(void)
-{
-    if (!initialized) {
-        ESP_LOGI(TAG, "DEBUG: LoRa not initialized");
-        return;
-    }
-    
-    uint8_t op_mode = read_reg(REG_OP_MODE);
-    uint8_t irq_flags = read_reg(REG_IRQ_FLAGS);
-    uint8_t dio_mapping = read_reg(REG_DIO_MAPPING_1);
-    int dio0_level = gpio_get_level(PIN_LORA_DIO0);
-    
-    ESP_LOGI(TAG, "DEBUG: OpMode=0x%02X, IRQflags=0x%02X, DIO_MAP=0x%02X, DIO0_pin=%d, rx_done_flag=%d",
-             op_mode, irq_flags, dio_mapping, dio0_level, rx_done_flag ? 1 : 0);
-}
-
 void lora_idle(void)
 {
     write_reg(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_STDBY);
+
+     // Wait for mode transition to complete
+    int retries = 0;
+    while ((read_reg(REG_OP_MODE) & 0x07) != MODE_STDBY && retries < 10) {
+        vTaskDelay(pdMS_TO_TICKS(1));
+        retries++;
+    }
 }
 
 void lora_sleep(void)
@@ -339,24 +355,26 @@ void lora_sleep(void)
 
 void lora_receive(void)
 {
-    // Simple - just enter RX continuous mode (like the working library)
-    write_reg(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_RX_CONTINUOUS);
-}
-
-bool lora_ensure_rx(void)
-{
-    // Check current mode - only re-enter RX if not already in RX continuous
-    uint8_t mode = read_reg(REG_OP_MODE);
+    if (!initialized) return;
     
+    // Check if already in RX continuous mode - don't disrupt
+    uint8_t mode = read_reg(REG_OP_MODE);
     if ((mode & 0x87) == (MODE_LONG_RANGE_MODE | MODE_RX_CONTINUOUS)) {
-        // Already in RX continuous mode
-        return false;
+        // Already in RX mode, don't touch anything
+        return;
     }
     
-    // Not in RX mode - need to re-enter
-    ESP_LOGW(TAG, "lora_ensure_rx: Was in mode 0x%02X, re-entering RX", mode);
-    lora_receive();
-    return true;
+    // Configure DIO0 for RxDone interrupt
+    write_reg(REG_DIO_MAPPING_1, DIO0_RX_DONE);
+    
+    // Clear any pending flags only when first entering RX
+    rx_done_flag = false;
+    write_reg(REG_IRQ_FLAGS, 0xFF);
+    
+    // Enter continuous receive mode
+    write_reg(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_RX_CONTINUOUS);
+    
+    ESP_LOGD(TAG, "Entered RX mode (was 0x%02X)", mode);
 }
 
 void lora_set_frequency(long frequency)
@@ -368,25 +386,49 @@ void lora_set_frequency(long frequency)
     write_reg(REG_FRF_MSB, (uint8_t)(frf >> 16));
     write_reg(REG_FRF_MID, (uint8_t)(frf >> 8));
     write_reg(REG_FRF_LSB, (uint8_t)(frf >> 0));
-    
-    ESP_LOGI(TAG, "Frequency set to %ld Hz", frequency);
 }
 
 void lora_set_tx_power(int level)
 {
-    if (level < 2) level = 2;
-    else if (level > 17) level = 17;
+     // PA config should be changed in standby mode
+    lora_idle();
     
-    write_reg(REG_PA_CONFIG, PA_BOOST | (level - 2));
-    ESP_LOGI(TAG, "TX power set to %d dBm", level);
-}
-
-void lora_update_power(void)
-{
-    bool high_power = ui_is_sensor_high_power();
-    int power = high_power ? LORA_TX_POWER_HIGH : LORA_TX_POWER_LOW;
-    lora_set_tx_power(power);
-    status.high_power = high_power;
+    uint8_t pa_config;
+    int reported_power;
+    
+    // Use RFO output (not PA_BOOST) for lower power levels
+    // RFO range: -4 to +14 dBm (MaxPower=0-7, OutputPower=0-15)
+    // PA_BOOST range: +2 to +17 dBm
+    
+    if (level <= 0) {
+        // Use RFO at minimum power for testing without antenna
+        // PA_CONFIG: PA_SELECT=0 (RFO), MaxPower=0, OutputPower=0 = -4 dBm
+        pa_config = 0x00;
+        reported_power = -4;
+    } else if (level < 2) {
+        // RFO low power
+        pa_config = 0x70 | level;  // MaxPower=7, OutputPower=level
+        reported_power = level;
+    } else {
+        // PA_BOOST for +2 to +17 dBm
+        if (level > 17) level = 17;
+        pa_config = PA_BOOST | (level - 2);
+        reported_power = level;
+    }
+    
+    write_reg(REG_PA_CONFIG, pa_config);
+    status.tx_power = reported_power;
+    
+    // Small delay to let PA stabilize
+    vTaskDelay(pdMS_TO_TICKS(5));
+    
+    // Read back and verify
+    uint8_t readback = read_reg(REG_PA_CONFIG);
+    if (readback != pa_config) {
+        ESP_LOGE(TAG, "TX power MISMATCH! Wrote 0x%02X, read 0x%02X", pa_config, readback);
+    } else {
+        ESP_LOGI(TAG, "TX power set to %d dBm (PA_CONFIG=0x%02X verified)", reported_power, readback);
+    }
 }
 
 void lora_set_spreading_factor(int sf)
@@ -457,11 +499,19 @@ esp_err_t lora_send_packet(const uint8_t *buf, int size)
         return ESP_ERR_INVALID_SIZE;
     }
 
-    // Update power setting before TX
-    lora_update_power();
-
+    // Put chip in standby mode before TX
     lora_idle();
+    vTaskDelay(pdMS_TO_TICKS(10));
+    
+    // Configure DIO0 for TX Done interrupt
+    //write_reg(REG_DIO_MAPPING_1, DIO0_TX_DONE);
+    
+    // Clear any pending IRQ flags and reset interrupt flag
+    write_reg(REG_IRQ_FLAGS, 0xFF);
+    rx_done_flag = false;
+    
     write_reg(REG_FIFO_ADDR_PTR, 0);
+    write_reg(REG_FIFO_TX_BASE_ADDR, 0);
 
     // Write data to FIFO
     for (int i = 0; i < size; i++) {
@@ -469,28 +519,75 @@ esp_err_t lora_send_packet(const uint8_t *buf, int size)
     }
     write_reg(REG_PAYLOAD_LENGTH, size);
 
+
+    // Verify FIFO pointer advanced correctly
+    uint8_t fifo_ptr = read_reg(REG_FIFO_ADDR_PTR);
+    if (fifo_ptr != size) {
+        ESP_LOGE(TAG, "FIFO write error: ptr=%d, expected=%d", fifo_ptr, size);
+    }
+
+    // Verify we're in standby before TX
+    uint8_t mode_before = read_reg(REG_OP_MODE);
+    uint8_t irq_before = read_reg(REG_IRQ_FLAGS);
+    ESP_LOGD(TAG, "TX %d bytes: OpMode=0x%02X, IRQ=0x%02X, FIFO=%d", size, mode_before, irq_before, fifo_ptr);
+
+
     // Start transmission
     write_reg(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_TX);
-
-    // Wait for TX done
+    
+    /**
+     // Wait for TX done using hardware DIO0 pin
     int timeout = 0;
-    while ((read_reg(REG_IRQ_FLAGS) & IRQ_TX_DONE_MASK) == 0) {
+    while (!rx_done_flag && gpio_get_level(PIN_LORA_DIO0) == 0) {
         vTaskDelay(pdMS_TO_TICKS(2));
         if (++timeout > 500) {  // 1 second timeout
             ESP_LOGE(TAG, "TX timeout");
             lora_idle();
+            write_reg(REG_DIO_MAPPING_1, DIO0_RX_DONE);
             return ESP_ERR_TIMEOUT;
         }
     }
 
+    // Verify TX completed
+    uint8_t irq_flags = read_reg(REG_IRQ_FLAGS);
+    if ((irq_flags & IRQ_TX_DONE_MASK) == 0) {
+        ESP_LOGE(TAG, "TX failed - IRQ_TX_DONE not set");
+        lora_idle();
+        write_reg(REG_DIO_MAPPING_1, DIO0_RX_DONE);
+        return ESP_ERR_INVALID_STATE;
+    }
+    */
+    /** */
+    // Wait for TX done
+    int64_t start_time = esp_timer_get_time();
+    int timeout = 0;
+    while ((read_reg(REG_IRQ_FLAGS) & IRQ_TX_DONE_MASK) == 0) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+        timeout++;
+        
+        if (timeout > 200) {  // 2 second timeout (200 * 10ms)
+            uint8_t irq_flags = read_reg(REG_IRQ_FLAGS);
+            uint8_t op_mode = read_reg(REG_OP_MODE);
+            int elapsed_ms = (int)((esp_timer_get_time() - start_time) / 1000);
+            ESP_LOGE(TAG, "TX timeout after %dms - IRQ: 0x%02X, OpMode: 0x%02X", 
+                     elapsed_ms, irq_flags, op_mode);
+            lora_idle();
+            return ESP_ERR_TIMEOUT;
+        }
+    }
+    
+    int elapsed_ms = (int)((esp_timer_get_time() - start_time) / 1000);
+    ESP_LOGD(TAG, "TX done in %dms (%d bytes)", elapsed_ms, size);
+
     // Clear IRQ
     write_reg(REG_IRQ_FLAGS, IRQ_TX_DONE_MASK);
     
-    // Return to standby mode
+    // Return to standby and restore DIO0 for RX
     lora_idle();
+    write_reg(REG_DIO_MAPPING_1, DIO0_RX_DONE);
+    rx_done_flag = false;
     
     status.packets_sent++;
-    ESP_LOGD(TAG, "Packet sent (%d bytes)", size);
 
     return ESP_OK;
 }
@@ -499,7 +596,10 @@ bool lora_received(void)
 {
     if (!initialized) return false;
     
-    // PURE POLLING - just check the register directly (like working library)
+    // Check interrupt flag first (faster), then verify with register
+    if (rx_done_flag) {
+        return true;
+    }
     return (read_reg(REG_IRQ_FLAGS) & IRQ_RX_DONE_MASK) != 0;
 }
 
@@ -526,16 +626,18 @@ int lora_receive_packet(uint8_t *buf, int size)
     if (!initialized) return 0;
 
     int irq = read_reg(REG_IRQ_FLAGS);
-    ESP_LOGI(TAG, "lora_receive_packet: IRQ flags = 0x%02X", irq);
     write_reg(REG_IRQ_FLAGS, irq);  // Clear flags
     rx_done_flag = false;           // Clear interrupt flag
 
-    if ((irq & IRQ_RX_DONE_MASK) == 0) {
-        ESP_LOGD(TAG, "No RX_DONE flag set");
+    if ((irq & IRQ_RX_DONE_MASK) == 0) return 0;
+    
+    ESP_LOGI(TAG, "lora_receive_packet: IRQ flags = 0x%02X", irq);
+    
+    if (irq & IRQ_PAYLOAD_CRC_ERROR_MASK) {
+        status.crc_errors++;
+        ESP_LOGW(TAG, "CRC error");
         return 0;
     }
-    
-    bool crc_error = (irq & IRQ_PAYLOAD_CRC_ERROR_MASK) != 0;
 
     // Get packet length
     int len;
@@ -544,36 +646,14 @@ int lora_receive_packet(uint8_t *buf, int size)
     } else {
         len = read_reg(REG_RX_NB_BYTES);
     }
-    
-    ESP_LOGI(TAG, "Packet length: %d bytes, CRC=%s", len, crc_error ? "ERROR" : "OK");
 
-    // Read packet from FIFO (even on CRC error for debugging)
+    // Read packet from FIFO
     lora_idle();
     write_reg(REG_FIFO_ADDR_PTR, read_reg(REG_FIFO_RX_CURRENT_ADDR));
     
     if (len > size) len = size;
     for (int i = 0; i < len; i++) {
         buf[i] = read_reg(REG_FIFO);
-    }
-    
-    // Debug: print first bytes
-    if (len > 0) {
-        ESP_LOGI(TAG, "Raw packet: %02X %02X %02X %02X %02X %02X %02X %02X ...", 
-                 buf[0], len > 1 ? buf[1] : 0, len > 2 ? buf[2] : 0,
-                 len > 3 ? buf[3] : 0, len > 4 ? buf[4] : 0, len > 5 ? buf[5] : 0,
-                 len > 6 ? buf[6] : 0, len > 7 ? buf[7] : 0);
-    }
-    
-    // Also print RX modem config for comparison
-    uint8_t config1 = read_reg(REG_MODEM_CONFIG_1);
-    uint8_t config2 = read_reg(REG_MODEM_CONFIG_2);
-    uint8_t sync = read_reg(REG_SYNC_WORD);
-    ESP_LOGI(TAG, "RX Config: MC1=0x%02X, MC2=0x%02X, Sync=0x%02X", config1, config2, sync);
-    
-    if (crc_error) {
-        status.crc_errors++;
-        ESP_LOGW(TAG, "CRC error - packet discarded");
-        return 0;
     }
 
     // Store RSSI/SNR
@@ -648,12 +728,12 @@ void lora_run_diagnostics(void)
         return;
     }
     
-    // 1. Check chip version
+    // Check chip version
     uint8_t version = read_reg(REG_VERSION);
     ESP_LOGI(TAG, "Chip version: 0x%02X %s", version, 
-             (version == 0x12) ? "(OK - SX1278)" : "(UNEXPECTED!)");
+             (version == 0x12) ? "(OK)" : "(UNEXPECTED!)");
     
-    // 2. Check operating mode
+    // Check operating mode
     uint8_t op_mode = read_reg(REG_OP_MODE);
     const char *mode_str = "Unknown";
     uint8_t mode = op_mode & 0x07;
@@ -664,69 +744,44 @@ void lora_run_diagnostics(void)
         case MODE_RX_CONTINUOUS:  mode_str = "RX Continuous"; break;
         case MODE_RX_SINGLE:      mode_str = "RX Single"; break;
     }
-    ESP_LOGI(TAG, "OpMode: 0x%02X (%s, LoRa=%s)", op_mode, mode_str,
-             (op_mode & MODE_LONG_RANGE_MODE) ? "Yes" : "No");
+    ESP_LOGI(TAG, "OpMode: 0x%02X (%s)", op_mode, mode_str);
     
-    // 3. Read frequency configuration
+    // Read frequency configuration
     uint8_t freq_msb = read_reg(REG_FRF_MSB);
     uint8_t freq_mid = read_reg(REG_FRF_MID);
     uint8_t freq_lsb = read_reg(REG_FRF_LSB);
     uint32_t freq_raw = ((uint32_t)freq_msb << 16) | ((uint32_t)freq_mid << 8) | freq_lsb;
     float freq_mhz = (float)freq_raw * 32.0f / (float)(1 << 19);
-    ESP_LOGI(TAG, "Frequency: %.2f MHz (reg=0x%06lX)", freq_mhz, (unsigned long)freq_raw);
+    ESP_LOGI(TAG, "Frequency: %.2f MHz", freq_mhz);
     
-    // 4. Check PA configuration
+    // Check PA configuration
     uint8_t pa_config = read_reg(REG_PA_CONFIG);
     int tx_power = (pa_config & 0x0F) + 2;
-    if (pa_config & PA_BOOST) tx_power += 1;  // PA_BOOST adds ~1dB
-    ESP_LOGI(TAG, "PA Config: 0x%02X (PA_BOOST=%s, power ~%d dBm)", 
-             pa_config, (pa_config & PA_BOOST) ? "Yes" : "No", tx_power);
+    ESP_LOGI(TAG, "TX Power: %d dBm", tx_power);
     
-    // 5. Check modem configuration
+    // Check modem configuration
     uint8_t config1 = read_reg(REG_MODEM_CONFIG_1);
     uint8_t config2 = read_reg(REG_MODEM_CONFIG_2);
     int sf = (config2 >> 4) & 0x0F;
     int bw = (config1 >> 4) & 0x0F;
-    int cr = (config1 >> 1) & 0x07;
     const char *bw_str[] = {"7.8", "10.4", "15.6", "20.8", "31.25", "41.7", "62.5", "125", "250", "500"};
-    ESP_LOGI(TAG, "Modem: SF%d, BW=%s kHz, CR=4/%d, CRC=%s", 
-             sf, (bw < 10) ? bw_str[bw] : "???", cr + 4,
+    ESP_LOGI(TAG, "Modem: SF%d, BW=%s kHz, CRC=%s", 
+             sf, (bw < 10) ? bw_str[bw] : "???",
              (config2 & 0x04) ? "On" : "Off");
     
-    // 6. Read RSSI (noise floor test)
-    ESP_LOGI(TAG, "Testing noise floor (entering RX mode)...");
+    // Test noise floor
     lora_receive();
-    vTaskDelay(pdMS_TO_TICKS(500));  // Let receiver stabilize
+    vTaskDelay(pdMS_TO_TICKS(100));
     
-    // Sample RSSI multiple times
-    int rssi_samples[10];
-    int rssi_min = 0, rssi_max = -200, rssi_sum = 0;
-    for (int i = 0; i < 10; i++) {
-        // Read wideband RSSI (current RSSI, not packet RSSI)
+    int rssi_sum = 0;
+    for (int i = 0; i < 5; i++) {
         int raw_rssi = read_reg(REG_RSSI_WIDEBAND);
-        rssi_samples[i] = raw_rssi - 157;  // Convert to dBm (for HF bands)
-        if (rssi_samples[i] < rssi_min) rssi_min = rssi_samples[i];
-        if (rssi_samples[i] > rssi_max) rssi_max = rssi_samples[i];
-        rssi_sum += rssi_samples[i];
-        vTaskDelay(pdMS_TO_TICKS(50));
+        rssi_sum += raw_rssi - 157;
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
-    int rssi_avg = rssi_sum / 10;
+    int rssi_avg = rssi_sum / 5;
+    ESP_LOGI(TAG, "Noise floor: %d dBm", rssi_avg);
     
-    ESP_LOGI(TAG, "Noise floor RSSI: avg=%d dBm, min=%d, max=%d", 
-             rssi_avg, rssi_min, rssi_max);
-    
-    // Interpret results
-    if (rssi_avg < -110) {
-        ESP_LOGI(TAG, ">> Noise floor looks good (quiet environment)");
-    } else if (rssi_avg < -100) {
-        ESP_LOGI(TAG, ">> Moderate noise floor (some interference)");
-    } else if (rssi_avg < -90) {
-        ESP_LOGW(TAG, ">> High noise floor (significant interference)");
-    } else {
-        ESP_LOGW(TAG, ">> Very high noise! Check antenna/environment");
-    }
-    
-    // Return to idle
     lora_idle();
     
     ESP_LOGI(TAG, "========== Diagnostics Complete ==========");
@@ -761,10 +816,12 @@ esp_err_t lora_send_secure(uint8_t dest_id, uint8_t msg_type,
                            const uint8_t *payload, int payload_len)
 {
     if (!initialized) {
+        ESP_LOGE(TAG, "lora_send_secure: Not initialized!");
         return ESP_ERR_INVALID_STATE;
     }
     
     if (payload_len > LORA_MAX_PAYLOAD) {
+        ESP_LOGE(TAG, "lora_send_secure: Payload too large (%d > %d)", payload_len, LORA_MAX_PAYLOAD);
         return ESP_ERR_INVALID_SIZE;
     }
     
@@ -772,8 +829,8 @@ esp_err_t lora_send_secure(uint8_t dest_id, uint8_t msg_type,
     uint8_t packet[256];
     lora_header_t *header = (lora_header_t *)packet;
     
-    // Fill header
-    header->device_id = LORA_DEVICE_ID_BASE;
+    // Fill header - sensor package identifies as REMOTE
+    header->device_id = LORA_DEVICE_ID_REMOTE;
     header->dest_id = dest_id;
     header->msg_type = msg_type;
     header->sequence = tx_sequence++;
@@ -789,10 +846,13 @@ esp_err_t lora_send_secure(uint8_t dest_id, uint8_t msg_type,
     uint16_t crc = lora_crc16(packet, LORA_HEADER_SIZE + payload_len);
     header->checksum = crc;
     
-    ESP_LOGD(TAG, "TX secure: dest=0x%02X type=0x%02X seq=%d len=%d crc=0x%04X",
-             dest_id, msg_type, header->sequence, payload_len, crc);
+    int total_len = LORA_HEADER_SIZE + payload_len;
     
-    return lora_send_packet(packet, LORA_HEADER_SIZE + payload_len);
+    esp_err_t ret = lora_send_packet(packet, total_len);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "TX failed: %s", esp_err_to_name(ret));
+    }
+    return ret;
 }
 
 int lora_receive_secure(uint8_t *src_id, uint8_t *msg_type,
@@ -811,18 +871,14 @@ int lora_receive_secure(uint8_t *src_id, uint8_t *msg_type,
         return 0;
     }
     
-    // Debug: Show header interpretation
     lora_header_t *header = (lora_header_t *)packet;
     int payload_len = len - LORA_HEADER_SIZE;
     
-    ESP_LOGI(TAG, "RX header: src=0x%02X dest=0x%02X type=0x%02X seq=%d crc=0x%04X payload_len=%d",
-             header->device_id, header->dest_id, header->msg_type, 
-             header->sequence, header->checksum, payload_len);
-    
     // Check destination (accept if addressed to us or broadcast)
-    if (header->dest_id != LORA_DEVICE_ID_BASE && header->dest_id != 0xFF) {
-        ESP_LOGW(TAG, "RX rejected: wrong dest (0x%02X, expected 0x%02X or 0xFF)", 
-                 header->dest_id, LORA_DEVICE_ID_BASE);
+    // Sensor package uses REMOTE device ID
+    if (header->dest_id != LORA_DEVICE_ID_REMOTE && header->dest_id != 0xFF) {
+        ESP_LOGW(TAG, "RX rejected: wrong dest (0x%02X, we are 0x%02X)", 
+                 header->dest_id, LORA_DEVICE_ID_REMOTE);
         status.packets_rejected++;
         return 0;
     }
@@ -842,8 +898,9 @@ int lora_receive_secure(uint8_t *src_id, uint8_t *msg_type,
     // Packet validated!
     status.last_src_id = header->device_id;
     
-    ESP_LOGD(TAG, "RX secure: src=0x%02X type=0x%02X seq=%d len=%d",
-             header->device_id, header->msg_type, header->sequence, payload_len);
+    ESP_LOGI(TAG, "RX secure: src=0x%02X dest=0x%02X type=0x%02X seq=%d len=%d RSSI=%d",
+             header->device_id, header->dest_id, header->msg_type, header->sequence, 
+             payload_len, status.last_rssi);
     
     // Return info to caller
     if (src_id) *src_id = header->device_id;
@@ -860,51 +917,27 @@ int lora_receive_secure(uint8_t *src_id, uint8_t *msg_type,
 }
 
 // =============================================================================
-// High-Level Protocol API
+// High-Level Protocol API (Sensor Package)
 // =============================================================================
 
-// Callbacks for received data
-static lora_weather_cb_t weather_callback = NULL;
-static lora_status_cb_t status_callback = NULL;
-static lora_config_ack_cb_t config_ack_callback = NULL;
-
-// Config retry state
-static config_payload_t pending_config;
-static bool config_pending = false;
-static uint8_t config_retry_count = 0;
-static int64_t config_last_send_us = 0;
-
-// Adaptive power state
-static bool adaptive_power_enabled = false;
-static bool high_power_enabled = false;
-static int8_t recent_rssi = -100;  // Track recent link quality
-static uint8_t current_tx_power = LORA_TX_POWER_LOW;
-
-void lora_set_weather_callback(lora_weather_cb_t callback)
+void lora_set_config_callback(lora_config_cb_t callback)
 {
-    weather_callback = callback;
+    config_callback = callback;
 }
 
-void lora_set_status_callback(lora_status_cb_t callback)
+void lora_set_weather_ack_callback(lora_weather_ack_cb_t callback)
 {
-    status_callback = callback;
-}
-
-void lora_set_config_ack_callback(lora_config_ack_cb_t callback)
-{
-    config_ack_callback = callback;
+    weather_ack_callback = callback;
 }
 
 void lora_set_adaptive_power(bool enable)
 {
     adaptive_power_enabled = enable;
-    ESP_LOGI(TAG, "Adaptive power %s", enable ? "enabled" : "disabled");
 }
 
 void lora_set_high_power(bool enable)
 {
     high_power_enabled = enable;
-    ESP_LOGI(TAG, "High power mode %s", enable ? "enabled" : "disabled");
 }
 
 uint8_t lora_get_suggested_power(void)
@@ -923,6 +956,16 @@ uint8_t lora_get_suggested_power(void)
     }
 }
 
+uint8_t lora_get_current_power(void)
+{
+    return current_tx_power;
+}
+
+int8_t lora_get_last_rssi(void)
+{
+    return status.last_rssi;
+}
+
 /**
  * @brief Apply adaptive power if enabled
  */
@@ -934,7 +977,7 @@ static void apply_adaptive_power(void)
     if (suggested != current_tx_power) {
         current_tx_power = suggested;
         lora_set_tx_power(current_tx_power);
-        ESP_LOGI(TAG, "Adaptive power: RSSI=%d -> TX=%d dBm", recent_rssi, current_tx_power);
+        ESP_LOGD(TAG, "Adaptive power: RSSI=%d -> TX=%d dBm", recent_rssi, current_tx_power);
     }
 }
 
@@ -944,11 +987,19 @@ esp_err_t lora_send_weather(const weather_payload_t *weather)
     
     apply_adaptive_power();
     
+    //quickly check the dbm level and the paboost level by reading the reg directly
+                    uint8_t pa_config = read_reg(0x09);
+                    int8_t paboost = (pa_config & 0x80) ? 1 : 0;
+                    int8_t output_power = pa_config & 0x0F;  // This is what you're missing
+
+                    int8_t tx_dbm = paboost ? (2 + output_power) : (-4 + output_power);
+                    ESP_LOGI(TAG, "power levels: PA_BOOST=%d, OutputPower=%d, TX Power=%d dBm", paboost, output_power, tx_dbm);
+
     return lora_send_secure(LORA_DEVICE_ID_BASE, MSG_TYPE_WEATHER_DATA,
                             (const uint8_t *)weather, sizeof(weather_payload_t));
 }
 
-esp_err_t lora_send_status(const status_payload_t *status_data)
+esp_err_t lora_send_sensor_status(const status_payload_t *status_data)
 {
     if (!status_data) return ESP_ERR_INVALID_ARG;
     
@@ -958,88 +1009,31 @@ esp_err_t lora_send_status(const status_payload_t *status_data)
                             (const uint8_t *)status_data, sizeof(status_payload_t));
 }
 
-esp_err_t lora_send_config(uint8_t dest_id, const config_payload_t *config)
+esp_err_t lora_send_config_ack(uint8_t config_seq, uint8_t applied_flags)
 {
-    if (!config) return ESP_ERR_INVALID_ARG;
-    
-    // Store config for retry until ACK received
-    memcpy(&pending_config, config, sizeof(config_payload_t));
-    config_pending = true;
-    config_retry_count = 0;
-    config_last_send_us = esp_timer_get_time();
-    
-    ESP_LOGI(TAG, "Sending config (seq=%d, will retry until ACK)", config->config_sequence);
-    return lora_send_secure(dest_id, MSG_TYPE_CONFIG,
-                            (const uint8_t *)config, sizeof(config_payload_t));
-}
-
-/**
- * @brief Send weather ACK to sensor
- * Sensor will clear lightning data upon receipt
- */
-esp_err_t lora_send_weather_ack(uint8_t dest_id, uint8_t sequence, int8_t rssi)
-{
-    weather_ack_payload_t ack = {
-        .acked_sequence = sequence,
-        .base_rssi = rssi,
-        .base_snr = (int8_t)(status.last_snr * 4),  // Convert to 0.25 dB units
-        .base_tx_power = current_tx_power,
-        .suggested_power = calculate_adaptive_power_limited(rssi, high_power_enabled)
+    config_ack_payload_t ack = {
+        .acked_sequence = config_seq,
+        .sensor_rssi = status.last_rssi,
+        .sensor_tx_power = current_tx_power,
+        .applied_flags = applied_flags
     };
     
-    ESP_LOGD(TAG, "Sending WEATHER_ACK: seq=%d, rssi=%d, suggested_power=%d",
-             sequence, rssi, ack.suggested_power);
-    return lora_send_secure(dest_id, MSG_TYPE_WEATHER_ACK,
-                            (const uint8_t *)&ack, sizeof(weather_ack_payload_t));
+    ESP_LOGI(TAG, "Sending CONFIG_ACK for seq=%d, flags=0x%02X", config_seq, applied_flags);
+    return lora_send_secure(LORA_DEVICE_ID_BASE, MSG_TYPE_CONFIG_ACK,
+                            (const uint8_t *)&ack, sizeof(config_ack_payload_t));
 }
 
-/**
- * @brief Check and retry pending config if needed
- * Call this periodically from main loop
- */
-void lora_config_retry_check(void)
+esp_err_t lora_send_weather_ack_ack(uint8_t acked_seq, uint32_t lightning_total)
 {
-    if (!config_pending) return;
-    
-    int64_t now = esp_timer_get_time();
-    int64_t elapsed_ms = (now - config_last_send_us) / 1000;
-    
-    if (elapsed_ms >= CONFIG_RETRY_INTERVAL_MS) {
-        if (config_retry_count < MAX_RETRIES) {
-            config_retry_count++;
-            config_last_send_us = now;
-            
-            ESP_LOGI(TAG, "Config retry %d/%d (seq=%d)", 
-                     config_retry_count, MAX_RETRIES, pending_config.config_sequence);
-            lora_send_secure(DEVICE_ID_REMOTE_1, MSG_TYPE_CONFIG,
-                            (const uint8_t *)&pending_config, sizeof(config_payload_t));
-        } else {
-            ESP_LOGW(TAG, "Config failed after %d retries", MAX_RETRIES);
-            config_pending = false;
-        }
-    }
-}
-
-// Legacy function (deprecated)
-esp_err_t lora_send_ack(uint8_t dest_id, uint8_t sequence)
-{
-    // Use new weather ACK instead
-    return lora_send_weather_ack(dest_id, sequence, status.last_rssi);
-}
-
-// Deprecated - use config with CFG_LOCATE_* flags
-esp_err_t lora_send_ping(uint8_t dest_id, bool locate)
-{
-    // Convert legacy ping to config with locate flag
-    config_payload_t config = {
-        .update_interval = 0,  // Don't change interval
-        .tx_power = 0,
-        .flags = locate ? CFG_LOCATE_BUZZER : 0,
-        .config_sequence = tx_sequence++
+    weather_ack_ack_payload_t ack_ack = {
+        .acked_sequence = acked_seq,
+        .lightning_total = lightning_total
     };
     
-    ESP_LOGI(TAG, "Legacy ping converted to config with locate=%d", locate);
-    return lora_send_config(dest_id, &config);
+    ESP_LOGI(TAG, "Sending WEATHER_ACK_ACK for seq=%d, lightning_total=%lu", 
+             acked_seq, (unsigned long)lightning_total);
+    return lora_send_secure(LORA_DEVICE_ID_BASE, MSG_TYPE_WEATHER_ACK_ACK,
+                            (const uint8_t *)&ack_ack, sizeof(weather_ack_ack_payload_t));
 }
 
 bool lora_process_rx(void)
@@ -1053,61 +1047,57 @@ bool lora_process_rx(void)
     // Update recent RSSI for adaptive power
     recent_rssi = status.last_rssi;
     
-    // Dispatch based on message type (base station receives weather, config_ack)
+    // Dispatch based on message type (sensor receives config, weather_ack)
     switch (msg_type) {
-        case MSG_TYPE_WEATHER_DATA:
-            if (len >= sizeof(weather_payload_t) && weather_callback) {
-                const weather_payload_t *weather = (const weather_payload_t *)payload;
-                weather_callback(src_id, weather, status.last_rssi);
+        case MSG_TYPE_CONFIG:
+            if (len >= sizeof(config_payload_t) && config_callback) {
+                const config_payload_t *config = (const config_payload_t *)payload;
+                ESP_LOGI(TAG, "CONFIG received: interval=%d, power=%d, flags=0x%02X",
+                         config->update_interval, config->tx_power, config->flags);
                 
-                // Send WEATHER_ACK with link quality info
-                // Sensor will clear lightning data on receipt
-                lora_send_weather_ack(src_id, weather->sequence, status.last_rssi);
+                // Handle locate flag (buzzer)
+                if (config->flags & CFG_LOCATE_BUZZER) {
+                    ESP_LOGI(TAG, "LOCATE BUZZER request received");
+                    // Callback will handle the locate action
+                }
+                
+                // Update high power mode setting
+                high_power_enabled = (config->flags & CFG_HIGH_POWER) != 0;
+                
+                // Call user callback
+                config_callback(config);
             }
             break;
             
-        case MSG_TYPE_CONFIG_ACK:
-            if (len >= sizeof(config_ack_payload_t)) {
-                const config_ack_payload_t *ack = (const config_ack_payload_t *)payload;
-                ESP_LOGI(TAG, "CONFIG_ACK received: seq=%d, sensor_rssi=%d, applied=0x%02X",
-                         ack->acked_sequence, ack->sensor_rssi, ack->applied_flags);
+        case MSG_TYPE_WEATHER_ACK:
+            if (len >= sizeof(weather_ack_payload_t) && weather_ack_callback) {
+                const weather_ack_payload_t *ack = (const weather_ack_payload_t *)payload;
+                ESP_LOGI(TAG, "WEATHER_ACK received: seq=%d, base_rssi=%d, suggested_power=%d",
+                         ack->acked_sequence, ack->base_rssi, ack->suggested_power);
                 
-                // Check if this matches our pending config
-                if (config_pending && ack->acked_sequence == pending_config.config_sequence) {
-                    config_pending = false;
-                    ESP_LOGI(TAG, "Config confirmed by sensor");
-                }
-                
-                // Update base power based on sensor feedback
+                // Update power based on base station feedback (with high power limit)
                 if (adaptive_power_enabled) {
-                    uint8_t new_power = calculate_adaptive_power_limited(ack->sensor_rssi, high_power_enabled);
+                    uint8_t new_power = calculate_adaptive_power_limited(ack->base_rssi, high_power_enabled);
                     if (new_power != current_tx_power) {
                         current_tx_power = new_power;
                         lora_set_tx_power(current_tx_power);
-                        ESP_LOGI(TAG, "Base power adjusted to %d dBm (sensor RSSI=%d)",
-                                 current_tx_power, ack->sensor_rssi);
+                        ESP_LOGI(TAG, "Power adjusted to %d dBm (base RSSI=%d, high_power=%d)",
+                                 current_tx_power, ack->base_rssi, high_power_enabled);
                     }
                 }
                 
-                // Call user callback if registered
-                if (config_ack_callback) {
-                    config_ack_callback(ack);
-                }
+                // Call user callback (handles lightning clearing)
+                weather_ack_callback(ack);
             }
             break;
             
-        case MSG_TYPE_SENSOR_STATUS:
-            // Deprecated but kept for backward compatibility
-            if (len >= sizeof(status_payload_t) && status_callback) {
-                status_callback(src_id, (const status_payload_t *)payload, status.last_rssi);
-            }
-            break;
-            
-        // Legacy message types - log warning
+        // Legacy message types (deprecated but kept for transition)
         case MSG_TYPE_ACK:
+            ESP_LOGW(TAG, "Legacy ACK received - use WEATHER_ACK instead");
+            break;
+            
         case MSG_TYPE_PING:
-        case MSG_TYPE_PONG:
-            ESP_LOGW(TAG, "Legacy message type 0x%02X received (deprecated)", msg_type);
+            ESP_LOGW(TAG, "Legacy PING received - use CONFIG with CFG_LOCATE_* flags instead");
             break;
             
         default:

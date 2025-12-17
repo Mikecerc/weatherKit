@@ -73,4 +73,9 @@ bool ui_is_settings_edit(void);
  */
 bool ui_is_about_view(void);
 
+/**
+ * @brief Get sensor status page scroll position
+ */
+int ui_get_sensor_status_scroll(void);
+
 #endif // UI_COMMON_H

@@ -70,7 +70,7 @@
 
 // LoRa TX Power Levels (dBm)
 // SX1278 PA_BOOST range: +2 to +17 dBm (or +20 with PA_HP)
-#define LORA_TX_POWER_LOW   15      // +15 dBm - higher power for testing
+#define LORA_TX_POWER_LOW   2       // +2 dBm - low power (no high power mode)
 #define LORA_TX_POWER_HIGH  17      // +17 dBm - requires antenna!
 
 // =============================================================================

@@ -74,7 +74,6 @@ static const char *TAG = "lora";
 
 // DIO0 mapping values (bits 7:6 of REG_DIO_MAPPING_1)
 #define DIO0_RX_DONE                   0x00  // DIO0 = RxDone
-#define DIO0_TX_DONE                   0x40  // DIO0 = TxDone
 
 #define TIMEOUT_RESET                  100
 
@@ -84,7 +83,7 @@ static const char *TAG = "lora";
 static spi_device_handle_t spi_handle = NULL;
 static bool initialized = false;
 static int implicit_header = 0;
-static long current_frequency = 915000000;  // Default 915 MHz
+static long current_frequency = 433000000;  // Default 433 MHz
 
 // Status tracking
 static lora_status_t status = {0};
@@ -98,12 +97,14 @@ static volatile bool rx_done_flag = false;
 
 // Callbacks for received data (sensor package specific)
 static lora_config_cb_t config_callback = NULL;
-static lora_ack_cb_t ack_callback = NULL;
-static lora_ping_cb_t ping_callback = NULL;
+static lora_weather_ack_cb_t weather_ack_callback = NULL;
+
+// High power mode state
+static bool high_power_enabled = false;
 
 // Adaptive power state
 static bool adaptive_power_enabled = false;
-static int8_t recent_rssi = 0;  // Start with "excellent" to keep power low until we have real RSSI data
+static int8_t recent_rssi = RSSI_POOR;  // Start with "excellent" to keep power low until we have real RSSI data
 static uint8_t current_tx_power = LORA_TX_POWER_LOW;
 
 // =============================================================================
@@ -289,7 +290,7 @@ esp_err_t lora_init(void)
     current_tx_power = LORA_TX_POWER_LOW;
 
     // Default settings
-    lora_set_frequency(915000000);  // 915 MHz (US ISM band)
+    lora_set_frequency(433000000);  // 915 MHz (US ISM band)
     lora_set_spreading_factor(7);   // SF7 (fastest)
     lora_set_bandwidth(125000);     // 125 kHz
     lora_set_coding_rate(5);        // 4/5
@@ -485,7 +486,7 @@ esp_err_t lora_send_packet(const uint8_t *buf, int size)
     vTaskDelay(pdMS_TO_TICKS(10));
     
     // Configure DIO0 for TX Done interrupt
-    write_reg(REG_DIO_MAPPING_1, DIO0_TX_DONE);
+    //write_reg(REG_DIO_MAPPING_1, DIO0_TX_DONE);
     
     // Clear any pending IRQ flags and reset interrupt flag
     write_reg(REG_IRQ_FLAGS, 0xFF);
@@ -902,19 +903,19 @@ void lora_set_config_callback(lora_config_cb_t callback)
     config_callback = callback;
 }
 
-void lora_set_ack_callback(lora_ack_cb_t callback)
+void lora_set_weather_ack_callback(lora_weather_ack_cb_t callback)
 {
-    ack_callback = callback;
-}
-
-void lora_set_ping_callback(lora_ping_cb_t callback)
-{
-    ping_callback = callback;
+    weather_ack_callback = callback;
 }
 
 void lora_set_adaptive_power(bool enable)
 {
     adaptive_power_enabled = enable;
+}
+
+void lora_set_high_power(bool enable)
+{
+    high_power_enabled = enable;
 }
 
 uint8_t lora_get_suggested_power(void)
@@ -964,6 +965,14 @@ esp_err_t lora_send_weather(const weather_payload_t *weather)
     
     apply_adaptive_power();
     
+    //quickly check the dbm level and the paboost level by reading the reg directly
+                    uint8_t pa_config = read_reg(0x09);
+                    int8_t paboost = (pa_config & 0x80) ? 1 : 0;
+                    int8_t output_power = pa_config & 0x0F;  // This is what you're missing
+
+                    int8_t tx_dbm = paboost ? (2 + output_power) : (-4 + output_power);
+                    ESP_LOGI(TAG, "power levels: PA_BOOST=%d, OutputPower=%d, TX Power=%d dBm", paboost, output_power, tx_dbm);
+
     return lora_send_secure(LORA_DEVICE_ID_BASE, MSG_TYPE_WEATHER_DATA,
                             (const uint8_t *)weather, sizeof(weather_payload_t));
 }
@@ -978,6 +987,20 @@ esp_err_t lora_send_sensor_status(const status_payload_t *status_data)
                             (const uint8_t *)status_data, sizeof(status_payload_t));
 }
 
+esp_err_t lora_send_config_ack(uint8_t config_seq, uint8_t applied_flags)
+{
+    config_ack_payload_t ack = {
+        .acked_sequence = config_seq,
+        .sensor_rssi = status.last_rssi,
+        .sensor_tx_power = current_tx_power,
+        .applied_flags = applied_flags
+    };
+    
+    ESP_LOGI(TAG, "Sending CONFIG_ACK for seq=%d, flags=0x%02X", config_seq, applied_flags);
+    return lora_send_secure(LORA_DEVICE_ID_BASE, MSG_TYPE_CONFIG_ACK,
+                            (const uint8_t *)&ack, sizeof(config_ack_payload_t));
+}
+
 bool lora_process_rx(void)
 {
     uint8_t src_id, msg_type;
@@ -989,49 +1012,57 @@ bool lora_process_rx(void)
     // Update recent RSSI for adaptive power
     recent_rssi = status.last_rssi;
     
-    // Dispatch based on message type (sensor package receives config, ack, ping)
+    // Dispatch based on message type (sensor receives config, weather_ack)
     switch (msg_type) {
         case MSG_TYPE_CONFIG:
             if (len >= sizeof(config_payload_t) && config_callback) {
-                config_callback((const config_payload_t *)payload);
+                const config_payload_t *config = (const config_payload_t *)payload;
+                ESP_LOGI(TAG, "CONFIG received: interval=%d, power=%d, flags=0x%02X",
+                         config->update_interval, config->tx_power, config->flags);
+                
+                // Handle locate flag (buzzer)
+                if (config->flags & CFG_LOCATE_BUZZER) {
+                    ESP_LOGI(TAG, "LOCATE BUZZER request received");
+                    // Callback will handle the locate action
+                }
+                
+                // Update high power mode setting
+                high_power_enabled = (config->flags & CFG_HIGH_POWER) != 0;
+                
+                // Call user callback
+                config_callback(config);
             }
             break;
             
-        case MSG_TYPE_ACK:
-            if (len >= sizeof(ack_payload_t) && ack_callback) {
-                const ack_payload_t *ack = (const ack_payload_t *)payload;
-                // Update power based on base station feedback
-                if (adaptive_power_enabled && ack->suggested_power != current_tx_power) {
-                    current_tx_power = ack->suggested_power;
-                    lora_set_tx_power(current_tx_power);
+        case MSG_TYPE_WEATHER_ACK:
+            if (len >= sizeof(weather_ack_payload_t) && weather_ack_callback) {
+                const weather_ack_payload_t *ack = (const weather_ack_payload_t *)payload;
+                ESP_LOGI(TAG, "WEATHER_ACK received: seq=%d, base_rssi=%d, suggested_power=%d",
+                         ack->acked_sequence, ack->base_rssi, ack->suggested_power);
+                
+                // Update power based on base station feedback (with high power limit)
+                if (adaptive_power_enabled) {
+                    uint8_t new_power = calculate_adaptive_power_limited(ack->base_rssi, high_power_enabled);
+                    if (new_power != current_tx_power) {
+                        current_tx_power = new_power;
+                        lora_set_tx_power(current_tx_power);
+                        ESP_LOGI(TAG, "Power adjusted to %d dBm (base RSSI=%d, high_power=%d)",
+                                 current_tx_power, ack->base_rssi, high_power_enabled);
+                    }
                 }
-                ack_callback(ack);
+                
+                // Call user callback (handles lightning clearing)
+                weather_ack_callback(ack);
             }
+            break;
+            
+        // Legacy message types (deprecated but kept for transition)
+        case MSG_TYPE_ACK:
+            ESP_LOGW(TAG, "Legacy ACK received - use WEATHER_ACK instead");
             break;
             
         case MSG_TYPE_PING:
-            {
-                uint8_t ping_type = 0;
-                if (len >= sizeof(ping_payload_t)) {
-                    const ping_payload_t *ping = (const ping_payload_t *)payload;
-                    ping_type = ping->ping_type;
-                }
-                
-                // Call user callback if registered
-                if (ping_callback) {
-                    ping_callback(ping_type);
-                }
-                
-                // Respond with PONG
-                pong_payload_t pong = {
-                    .ping_type = ping_type,
-                    .rssi = status.last_rssi,
-                    .battery_percent = 100,  // TODO: Get actual battery
-                    .tx_power = current_tx_power
-                };
-                lora_send_secure(src_id, MSG_TYPE_PONG, 
-                                (const uint8_t *)&pong, sizeof(pong_payload_t));
-            }
+            ESP_LOGW(TAG, "Legacy PING received - use CONFIG with CFG_LOCATE_* flags instead");
             break;
             
         default:

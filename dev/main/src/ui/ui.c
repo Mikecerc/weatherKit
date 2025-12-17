@@ -32,6 +32,7 @@ static bool in_about_view = false;
 static bool in_info_view = false;
 static bool in_lora_confirm = false;  // Confirmation dialog for LoRa high power
 static int info_page_num = 0;
+static int sensor_status_scroll = 0;  // Scroll position for sensor status page
 static weather_data_t cached_weather = {0};
 static ui_settings_t settings = {
     .brightness = 100,
@@ -280,6 +281,11 @@ bool ui_is_about_view(void)
     return in_about_view;
 }
 
+int ui_get_sensor_status_scroll(void)
+{
+    return sensor_status_scroll;
+}
+
 // ============================================================================
 // Display Refresh
 // ============================================================================
@@ -436,6 +442,9 @@ void ui_select(void)
             in_settings_edit = true;
             settings_cursor = SETTINGS_BRIGHTNESS;  // Start at first item
         }
+    } else if (current_page == UI_PAGE_SENSOR_STATUS) {
+        // RIGHT scrolls sensor status page (wraps around)
+        sensor_status_scroll = (sensor_status_scroll + 1) % 2;  // 2 scroll positions
     }
     // Other pages: select does nothing for now
     refresh_pending = true;

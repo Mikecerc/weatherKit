@@ -47,21 +47,30 @@
 // =============================================================================
 // Message Types
 // =============================================================================
-#define MSG_TYPE_WEATHER_DATA   0x01    // Remote -> Base: Sensor readings
-#define MSG_TYPE_SENSOR_STATUS  0x02    // Remote -> Base: Battery, RSSI, etc.
-#define MSG_TYPE_ACK            0x03    // Base -> Remote: Acknowledgment
-#define MSG_TYPE_CONFIG         0x04    // Base -> Remote: Configuration update
-#define MSG_TYPE_PING           0x05    // Base -> Remote: Locate/wake signal
-#define MSG_TYPE_PONG           0x06    // Remote -> Base: Response to ping
+#define MSG_TYPE_WEATHER_DATA   0x01    // Remote -> Base: Sensor readings + config echo
+#define MSG_TYPE_WEATHER_ACK    0x02    // Base -> Remote: Weather received ACK
+#define MSG_TYPE_WEATHER_ACK_ACK 0x05   // Remote -> Base: Confirms ACK received, lightning cleared
+#define MSG_TYPE_CONFIG         0x03    // Base -> Remote: Configuration update
+#define MSG_TYPE_CONFIG_ACK     0x04    // Remote -> Base: Config received acknowledgment
+
+// Legacy types (deprecated - kept for compatibility during transition)
+#define MSG_TYPE_SENSOR_STATUS  0x10    // DEPRECATED: Use weather packets as heartbeat
+#define MSG_TYPE_ACK            0x11    // DEPRECATED: Use MSG_TYPE_WEATHER_ACK
+#define MSG_TYPE_PING           0x12    // DEPRECATED: Use config with locate flag
+#define MSG_TYPE_PONG           0x13    // DEPRECATED: Removed
 
 // =============================================================================
 // TX Power Levels (dBm)
 // =============================================================================
 #define TX_POWER_MIN            2       // Minimum power (safe, short range)
-#define TX_POWER_LOW            7       // Low power
-#define TX_POWER_MED            12      // Medium power
-#define TX_POWER_HIGH           17      // High power (requires antenna!)
-#define TX_POWER_MAX            20      // Maximum power (PA_HP, requires antenna!)
+#define TX_POWER_LOW            2       // Low power mode limit (2 dBm)
+#define TX_POWER_MED            7       // Medium power
+#define TX_POWER_HIGH           12      // High power  
+#define TX_POWER_MAX            17      // Maximum power (PA_BOOST, requires antenna!)
+
+// High power mode allows TX above 2dBm
+#define TX_POWER_LOW_MODE_MAX   2       // Max power when HIGH_POWER disabled
+#define TX_POWER_HIGH_MODE_MAX  17      // Max power when HIGH_POWER enabled
 
 // =============================================================================
 // Adaptive Power Thresholds
@@ -76,13 +85,13 @@
 // =============================================================================
 // Timing Configuration (defaults, can be changed via config message)
 // =============================================================================
-#define DEFAULT_UPDATE_INTERVAL_SEC     5       // Send weather data every 5s (fast for testing!)
+#define DEFAULT_UPDATE_INTERVAL_SEC     30      // Send weather data every 30s
 #define MIN_UPDATE_INTERVAL_SEC         5       // Minimum 5 seconds
 #define MAX_UPDATE_INTERVAL_SEC         3600    // Maximum 1 hour
 
-#define DEFAULT_HEARTBEAT_INTERVAL_SEC  300     // Status heartbeat every 5 min
 #define ACK_TIMEOUT_MS                  1000    // Wait 1s for ACK
 #define MAX_RETRIES                     3       // Retry count before giving up
+#define CONFIG_RETRY_INTERVAL_MS        2000    // Retry config every 2s until ACK
 
 // =============================================================================
 // Packet Structures
@@ -114,18 +123,34 @@ typedef struct __attribute__((packed)) {
 
 // Maximum lightning strikes we can report in one packet
 // Limited by LoRa packet size (each distance is 1 byte = 0-63 km range)
-#define MAX_LIGHTNING_STRIKES   16
+#define MAX_LIGHTNING_STRIKES   8
 
 /**
  * @brief Lightning strike data
- * Records strikes since last weather report
+ * Records strikes since last ACKNOWLEDGED weather report
+ * Data is only cleared when weather ACK is received from base
  */
 typedef struct __attribute__((packed)) {
-    uint8_t count;                              // Number of strikes (0-255)
-    uint8_t distances[MAX_LIGHTNING_STRIKES];   // Distance of each strike in km (0-63)
-                                                // Only first 'count' entries are valid
+    uint32_t total_count;                       // Total strike count since power-on
+    uint8_t strikes_since_ack;                  // Number of strikes since last ACK (0-255)
+    uint8_t distances[MAX_LIGHTNING_STRIKES];   // Distance of each recent strike in km (0-63)
+                                                // Only first 'strikes_since_ack' entries valid (up to MAX)
                                                 // 0xFF = out of range / unknown
 } lightning_data_t;
+
+// =============================================================================
+// Sensor Configuration (echoed in weather packets)
+// =============================================================================
+
+/**
+ * @brief Sensor configuration state
+ * Included in weather packets so base knows actual sensor state
+ */
+typedef struct __attribute__((packed)) {
+    uint16_t update_interval;   // Current weather update interval in seconds
+    uint8_t tx_power;           // Current TX power level (dBm)
+    uint8_t flags;              // Configuration flags (CFG_*)
+} sensor_config_echo_t;
 
 // =============================================================================
 // Weather Payload
@@ -134,26 +159,35 @@ typedef struct __attribute__((packed)) {
 /**
  * @brief Weather data payload (Remote -> Base)
  * Sent periodically with sensor readings
+ * This is the primary packet - acts as heartbeat
  * 
- * Sensors: BME280 (temp/humidity/pressure) + AS3935 (lightning)
+ * Sensors: BME280/AHT20 (temp/humidity/pressure) + AS3935 (lightning)
  */
 typedef struct __attribute__((packed)) {
-    // BME280 data
+    // BME280/AHT20 data
     int16_t temperature;        // Temperature in 0.01°C (e.g., 2250 = 22.50°C)
     uint16_t humidity;          // Humidity in 0.01% (e.g., 4500 = 45.00%)
     uint16_t pressure;          // Pressure in 0.1 hPa (e.g., 10132 = 1013.2 hPa)
     
-    // AS3935 lightning data
-    lightning_data_t lightning; // Lightning strikes since last report
+    // AS3935 lightning data (only cleared on ACK receipt)
+    lightning_data_t lightning; // Lightning strikes since last ACK
+    
+    // Current sensor configuration (so base knows actual state)
+    sensor_config_echo_t config;// Current config state
     
     // Link quality (for adaptive power)
-    int8_t rssi;                // RSSI of last received packet from base
-    uint8_t tx_power;           // Current TX power level
+    int8_t last_base_rssi;      // RSSI of last received packet from base
+    uint8_t sensor_tx_power;    // Current sensor TX power level
+    
+    // Status
+    uint8_t error_flags;        // Sensor error flags (ERR_*)
+    uint8_t sequence;           // Packet sequence for ACK matching
+    uint32_t uptime_sec;        // Sensor uptime in seconds
 } weather_payload_t;
 
 /**
- * @brief Sensor status payload (Remote -> Base)
- * Sent periodically as heartbeat
+ * @brief Sensor status payload (DEPRECATED - use weather packets)
+ * Kept for backward compatibility
  */
 typedef struct __attribute__((packed)) {
     uint16_t battery_mv;        // Battery voltage in mV
@@ -177,21 +211,59 @@ typedef struct __attribute__((packed)) {
 /**
  * @brief Configuration payload (Base -> Remote)
  * Sent to change remote sensor settings
+ * Retransmitted until CONFIG_ACK received
  */
 typedef struct __attribute__((packed)) {
     uint16_t update_interval;   // Weather update interval in seconds
-    uint16_t heartbeat_interval;// Status heartbeat interval in seconds
-    uint8_t tx_power;           // TX power level to use
+    uint8_t tx_power;           // TX power level to use (only if adaptive off)
     uint8_t flags;              // Configuration flags
+    uint8_t config_sequence;    // Sequence number for ACK matching
 } config_payload_t;
 
 // Configuration flags
 #define CFG_ADAPTIVE_POWER      0x01    // Enable adaptive TX power
-#define CFG_SLEEP_BETWEEN       0x02    // Sleep between transmissions
-#define CFG_ACK_REQUIRED        0x04    // Require ACK for weather data
+#define CFG_HIGH_POWER          0x02    // Allow TX power above 2dBm
+#define CFG_LOCATE_BUZZER       0x04    // Enable locate buzzer on sensor
+
+// Legacy flags (deprecated)
+#define CFG_SLEEP_BETWEEN       0x10    // DEPRECATED: Sleep between transmissions
+#define CFG_ACK_REQUIRED        0x20    // DEPRECATED: Always require ACK for weather
 
 /**
- * @brief Acknowledgment payload (Base -> Remote)
+ * @brief Weather acknowledgment payload (Base -> Remote)
+ * Sent in response to weather packets
+ */
+typedef struct __attribute__((packed)) {
+    uint8_t acked_sequence;     // Sequence number being acknowledged
+    int8_t base_rssi;           // RSSI of weather packet at base (for sensor power adjust)
+    int8_t base_snr;            // SNR of weather packet at base
+    uint8_t base_tx_power;      // Base's current TX power
+    uint8_t suggested_power;    // Suggested TX power for sensor
+} weather_ack_payload_t;
+
+/**
+ * @brief Weather ACK-ACK payload (Remote -> Base)
+ * Confirms sensor received the ACK and cleared lightning data
+ * Base uses this to safely record lightning without double-counting
+ */
+typedef struct __attribute__((packed)) {
+    uint8_t acked_sequence;     // Sequence number being confirmed
+    uint32_t lightning_total;   // Total lightning count after clearing (for base to sync)
+} weather_ack_ack_payload_t;
+
+/**
+ * @brief Config acknowledgment payload (Remote -> Base)
+ * Sent in response to config packets
+ */
+typedef struct __attribute__((packed)) {
+    uint8_t acked_sequence;     // Config sequence being acknowledged
+    int8_t sensor_rssi;         // RSSI of config packet at sensor
+    uint8_t sensor_tx_power;    // Sensor's current TX power
+    uint8_t applied_flags;      // Flags that were actually applied
+} config_ack_payload_t;
+
+/**
+ * @brief Legacy ACK payload (DEPRECATED)
  */
 typedef struct __attribute__((packed)) {
     uint8_t acked_sequence;     // Sequence number being acknowledged
@@ -200,25 +272,7 @@ typedef struct __attribute__((packed)) {
     uint8_t suggested_power;    // Suggested TX power based on link quality
 } ack_payload_t;
 
-/**
- * @brief Ping payload (Base -> Remote)
- * Used to locate sensor or wake from deep sleep
- */
-typedef struct __attribute__((packed)) {
-    uint8_t ping_type;          // 0=status request, 1=locate (flash LED)
-    uint8_t reserved[3];        // Future use
-} ping_payload_t;
 
-/**
- * @brief Pong payload (Remote -> Base)
- * Response to ping
- */
-typedef struct __attribute__((packed)) {
-    uint8_t ping_type;          // Echo of ping type
-    int8_t rssi;                // RSSI of ping
-    uint8_t battery_percent;    // Quick battery status
-    uint8_t tx_power;           // Current TX power
-} pong_payload_t;
 
 // =============================================================================
 // Complete Packet with CRC
@@ -340,26 +394,61 @@ static inline float decode_pressure(uint16_t encoded)
  */
 static inline void lightning_data_init(lightning_data_t *data)
 {
-    data->count = 0;
+    data->total_count = 0;
+    data->strikes_since_ack = 0;
     for (int i = 0; i < MAX_LIGHTNING_STRIKES; i++) {
         data->distances[i] = 0xFF;  // Invalid/unused
     }
 }
 
 /**
+ * @brief Clear strikes since ACK (called when ACK received)
+ * Does NOT clear total_count
+ * @param data Pointer to lightning data
+ */
+static inline void lightning_data_clear_pending(lightning_data_t *data)
+{
+    data->strikes_since_ack = 0;
+    for (int i = 0; i < MAX_LIGHTNING_STRIKES; i++) {
+        data->distances[i] = 0xFF;
+    }
+}
+
+/**
  * @brief Add a lightning strike to the data
+ * Keeps the 8 closest strikes (most dangerous for user safety)
  * @param data Pointer to lightning data
  * @param distance_km Distance in km (0-63, or 0xFF for out of range)
- * @return true if added, false if array full
+ * @return true if stored in array, false if farther than all stored strikes
  */
 static inline bool lightning_data_add(lightning_data_t *data, uint8_t distance_km)
 {
-    if (data->count >= MAX_LIGHTNING_STRIKES) {
-        return false;  // Array full
+    data->total_count++;
+    
+    // If array not full yet, just add it
+    if (data->strikes_since_ack < MAX_LIGHTNING_STRIKES) {
+        data->distances[data->strikes_since_ack] = distance_km;
+        data->strikes_since_ack++;
+        return true;
     }
-    data->distances[data->count] = distance_km;
-    data->count++;
-    return true;
+    
+    // Array is full - find the farthest strike and replace if new one is closer
+    uint8_t farthest_idx = 0;
+    uint8_t farthest_dist = data->distances[0];
+    for (int i = 1; i < MAX_LIGHTNING_STRIKES; i++) {
+        if (data->distances[i] > farthest_dist) {
+            farthest_dist = data->distances[i];
+            farthest_idx = i;
+        }
+    }
+    
+    // Replace farthest if new strike is closer
+    if (distance_km < farthest_dist) {
+        data->distances[farthest_idx] = distance_km;
+        return true;
+    }
+    
+    return false;  // New strike is farther than all stored, but still counted in total
 }
 
 /**
@@ -369,15 +458,37 @@ static inline bool lightning_data_add(lightning_data_t *data, uint8_t distance_k
  */
 static inline uint8_t lightning_data_closest(const lightning_data_t *data)
 {
-    if (data->count == 0) return 0xFF;
+    if (data->strikes_since_ack == 0) return 0xFF;
     
     uint8_t closest = 0xFF;
-    for (int i = 0; i < data->count && i < MAX_LIGHTNING_STRIKES; i++) {
+    int count = (data->strikes_since_ack < MAX_LIGHTNING_STRIKES) ? 
+                data->strikes_since_ack : MAX_LIGHTNING_STRIKES;
+    for (int i = 0; i < count; i++) {
         if (data->distances[i] < closest) {
             closest = data->distances[i];
         }
     }
     return closest;
+}
+
+/**
+ * @brief Calculate adaptive power with high power mode awareness
+ * @param rssi Received signal strength
+ * @param high_power_enabled Whether high power mode is allowed
+ * @return Suggested TX power level (capped if high power disabled)
+ */
+static inline uint8_t calculate_adaptive_power_limited(int8_t rssi, bool high_power_enabled)
+{
+    uint8_t power;
+    if (rssi > RSSI_EXCELLENT) power = TX_POWER_MIN;
+    else if (rssi > RSSI_GOOD) power = TX_POWER_MIN;
+    else if (rssi > RSSI_FAIR) power = TX_POWER_MED;
+    else if (rssi > RSSI_POOR) power = TX_POWER_HIGH;
+    else power = TX_POWER_MAX;
+    
+    // Cap power if high power mode is disabled
+    uint8_t max_power = high_power_enabled ? TX_POWER_HIGH_MODE_MAX : TX_POWER_LOW_MODE_MAX;
+    return (power > max_power) ? max_power : power;
 }
 
 #endif // LORA_PROTOCOL_H

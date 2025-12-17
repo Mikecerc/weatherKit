@@ -23,7 +23,6 @@ static const char *TAG = "led";
 static rmt_channel_handle_t led_channel = NULL;
 static rmt_encoder_handle_t led_encoder = NULL;
 static bool initialized = false;
-static bool locate_active = false;
 
 // Current LED color
 static uint8_t current_r = 0, current_g = 0, current_b = 0;
@@ -219,37 +218,4 @@ void led_set_color(uint8_t red, uint8_t green, uint8_t blue)
 void led_off(void)
 {
     led_set_color(0, 0, 0);
-    locate_active = false;
-}
-
-void led_set_locate(bool enable)
-{
-    locate_active = enable;
-    if (enable) {
-        // Blue for locate
-        led_set_color(0, 0, 255);
-    } else {
-        led_off();
-    }
-}
-
-void led_flash_locate(uint32_t duration_ms)
-{
-    if (!initialized) {
-        return;
-    }
-    
-    locate_active = true;
-    
-    // Flash blue
-    led_set_color(0, 0, 255);
-    vTaskDelay(pdMS_TO_TICKS(duration_ms));
-    led_off();
-    
-    locate_active = false;
-}
-
-bool led_is_locate_active(void)
-{
-    return locate_active;
 }

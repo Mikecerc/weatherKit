@@ -303,27 +303,43 @@ void lora_set_weather_callback(lora_weather_cb_t callback);
 
 /**
  * @brief Set callback for received status data (base station)
+ * @deprecated Weather packets now serve as heartbeat
  */
 typedef void (*lora_status_cb_t)(uint8_t src_id, const status_payload_t *data, int8_t rssi);
 void lora_set_status_callback(lora_status_cb_t callback);
 
 /**
- * @brief Set callback for received config (remote sensor)
+ * @brief Set callback for received config ACK (base station)
  */
-typedef void (*lora_config_cb_t)(const config_payload_t *config);
-void lora_set_config_callback(lora_config_cb_t callback);
+typedef void (*lora_config_ack_cb_t)(const config_ack_payload_t *ack);
+void lora_set_config_ack_callback(lora_config_ack_cb_t callback);
 
 /**
- * @brief Set callback for received ACK (remote sensor)
+ * @brief Send weather ACK to sensor (triggers lightning data clear)
+ * @param dest_id Target device ID
+ * @param sequence Weather packet sequence being acknowledged
+ * @param rssi RSSI of received weather packet (for sensor power adjustment)
+ * @return ESP_OK on success
  */
-typedef void (*lora_ack_cb_t)(const ack_payload_t *ack);
-void lora_set_ack_callback(lora_ack_cb_t callback);
+esp_err_t lora_send_weather_ack(uint8_t dest_id, uint8_t sequence, int8_t rssi);
+
+/**
+ * @brief Check and retry pending config if needed
+ * Call this periodically from main loop
+ */
+void lora_config_retry_check(void);
 
 /**
  * @brief Enable/disable adaptive TX power
  * @param enable true to automatically adjust power based on link quality
  */
 void lora_set_adaptive_power(bool enable);
+
+/**
+ * @brief Enable/disable high power mode
+ * @param enable true to allow TX power above 2dBm
+ */
+void lora_set_high_power(bool enable);
 
 /**
  * @brief Get suggested TX power based on recent link quality

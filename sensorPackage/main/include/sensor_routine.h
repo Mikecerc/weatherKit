@@ -3,7 +3,7 @@
  * @brief Sensor routine for WeatherKit Sensor Package
  * 
  * Handles periodic sensor reading and transmission to base station.
- * Currently uses fake data - real sensor drivers to be added later.
+ * Orchestrates individual tasks for LED, LoRa RX, and weather TX.
  */
 
 #ifndef SENSOR_ROUTINE_H
@@ -12,30 +12,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
-
-// =============================================================================
-// Configuration
-// =============================================================================
-
-/**
- * @brief Sensor routine configuration
- */
-typedef struct {
-    uint16_t update_interval_sec;       // Weather data send interval (seconds)
-    bool adaptive_power;                // Enable adaptive TX power
-    bool high_power;                    // Allow TX power above 2dBm
-    bool use_fake_data;                 // Use fake sensor data (for testing)
-} sensor_config_t;
-
-/**
- * @brief Default sensor configuration
- */
-#define SENSOR_CONFIG_DEFAULT() { \
-    .update_interval_sec = 30, \
-    .adaptive_power = true, \
-    .high_power = false, \
-    .use_fake_data = false \
-}
+#include "tasks/task_common.h"  // For sensor_config_t
 
 // =============================================================================
 // API Functions

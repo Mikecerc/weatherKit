@@ -138,7 +138,7 @@ static void on_config_received(const config_payload_t *config)
 
 /**
  * @brief Called when weather ACK received from base
- * This clears the pending lightning data
+ * This clears the pending lightning data and sends ACK-ACK
  */
 static void on_weather_ack_received(const weather_ack_payload_t *ack)
 {
@@ -154,9 +154,14 @@ static void on_weather_ack_received(const weather_ack_payload_t *ack)
         lightning_data_clear_pending(&accumulated_lightning);
         ESP_LOGI(TAG, "Lightning data cleared (ACK seq matched)");
         awaiting_weather_ack = false;
+        
+        // Send ACK-ACK to confirm we cleared the lightning data
+        // This tells base it's safe to record the lightning without double-counting
+        lora_send_weather_ack_ack(ack->acked_sequence, accumulated_lightning.total_count);
     } else {
-        ESP_LOGW(TAG, "ACK sequence mismatch: got %d, expected %d",
+        ESP_LOGW(TAG, "ACK sequence mismatch: got %d, expected %d (ignoring duplicate)",
                  ack->acked_sequence, last_weather_sequence);
+        // Don't send ACK-ACK for mismatched sequence - already processed
     }
     
     packets_acked++;

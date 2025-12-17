@@ -1,9 +1,9 @@
 /**
  * @file lora.h
- * @brief LoRa driver for SX1278/RA-02 module (Sensor Package Version)
+ * @brief LoRa driver for SX1278/RA-02 module
  * 
  * Based on Inteform/esp32-lora-library
- * Modified for WeatherKit Sensor Package - no UI dependencies
+ * Modified for WeatherKit with pinout.h configuration
  */
 
 #ifndef LORA_H
@@ -72,6 +72,11 @@ esp_err_t lora_init(void);
 bool lora_is_initialized(void);
 
 /**
+ * @brief Print debug information about LoRa state
+ */
+void lora_debug_status(void);
+
+/**
  * @brief Set the radio into idle (standby) mode
  */
 void lora_idle(void);
@@ -85,6 +90,12 @@ void lora_sleep(void);
  * @brief Set the radio into continuous receive mode
  */
 void lora_receive(void);
+
+/**
+ * @brief Ensure radio is in RX mode, re-entering only if needed
+ * @return true if mode was changed, false if already in RX
+ */
+bool lora_ensure_rx(void);
 
 /**
  * @brief Set carrier frequency
@@ -183,6 +194,12 @@ float lora_packet_snr(void);
 void lora_get_status(lora_status_t *status);
 
 /**
+ * @brief Update TX power based on UI setting
+ * Called when high_power setting changes
+ */
+void lora_update_power(void);
+
+/**
  * @brief Shutdown the LoRa module
  */
 void lora_close(void);
@@ -231,7 +248,7 @@ int lora_receive_secure(uint8_t *src_id, uint8_t *msg_type,
 uint16_t lora_crc16(const uint8_t *data, int len);
 
 // =============================================================================
-// High-Level Protocol API (WeatherKit specific - Sensor Package)
+// High-Level Protocol API (WeatherKit specific)
 // =============================================================================
 
 /**
@@ -242,20 +259,35 @@ uint16_t lora_crc16(const uint8_t *data, int len);
 esp_err_t lora_send_weather(const weather_payload_t *weather);
 
 /**
- * @brief Send config acknowledgment to base station
- * @param config_seq Config sequence being acknowledged
- * @param applied_flags Flags that were actually applied
- * @return ESP_OK on success
- */
-esp_err_t lora_send_config_ack(uint8_t config_seq, uint8_t applied_flags);
-
-/**
  * @brief Send status/heartbeat to base station (for remote sensor)
  * @param status Pointer to status payload
  * @return ESP_OK on success
- * @deprecated Use weather packets as heartbeat instead
  */
-esp_err_t lora_send_sensor_status(const status_payload_t *status);
+esp_err_t lora_send_status(const status_payload_t *status);
+
+/**
+ * @brief Send configuration to remote sensor (for base station)
+ * @param dest_id Target device ID
+ * @param config Pointer to configuration
+ * @return ESP_OK on success
+ */
+esp_err_t lora_send_config(uint8_t dest_id, const config_payload_t *config);
+
+/**
+ * @brief Send ACK with link quality feedback (for base station)
+ * @param dest_id Target device ID
+ * @param sequence Sequence number being ACKed
+ * @return ESP_OK on success
+ */
+esp_err_t lora_send_ack(uint8_t dest_id, uint8_t sequence);
+
+/**
+ * @brief Send ping/locate signal (for base station)
+ * @param dest_id Target device ID (or broadcast)
+ * @param locate If true, remote should flash LED
+ * @return ESP_OK on success
+ */
+esp_err_t lora_send_ping(uint8_t dest_id, bool locate);
 
 /**
  * @brief Process received packet and dispatch to handler
@@ -264,17 +296,45 @@ esp_err_t lora_send_sensor_status(const status_payload_t *status);
 bool lora_process_rx(void);
 
 /**
- * @brief Set callback for received config (remote sensor)
+ * @brief Set callback for received weather data (base station)
  */
-typedef void (*lora_config_cb_t)(const config_payload_t *config);
-void lora_set_config_callback(lora_config_cb_t callback);
+typedef void (*lora_weather_cb_t)(uint8_t src_id, const weather_payload_t *data, int8_t rssi);
+void lora_set_weather_callback(lora_weather_cb_t callback);
 
 /**
- * @brief Set callback for received weather ACK (remote sensor)
- * ACK contains RSSI for adaptive power, sequence for lightning clearing
+ * @brief Set callback for received status data (base station)
+ * @deprecated Weather packets now serve as heartbeat
  */
-typedef void (*lora_weather_ack_cb_t)(const weather_ack_payload_t *ack);
-void lora_set_weather_ack_callback(lora_weather_ack_cb_t callback);
+typedef void (*lora_status_cb_t)(uint8_t src_id, const status_payload_t *data, int8_t rssi);
+void lora_set_status_callback(lora_status_cb_t callback);
+
+/**
+ * @brief Set callback for received config ACK (base station)
+ */
+typedef void (*lora_config_ack_cb_t)(const config_ack_payload_t *ack);
+void lora_set_config_ack_callback(lora_config_ack_cb_t callback);
+
+/**
+ * @brief Set callback for received weather ACK-ACK (base station)
+ * This confirms sensor received ACK and cleared lightning data
+ */
+typedef void (*lora_weather_ack_ack_cb_t)(const weather_ack_ack_payload_t *ack_ack);
+void lora_set_weather_ack_ack_callback(lora_weather_ack_ack_cb_t callback);
+
+/**
+ * @brief Send weather ACK to sensor (triggers lightning data clear)
+ * @param dest_id Target device ID
+ * @param sequence Weather packet sequence being acknowledged
+ * @param rssi RSSI of received weather packet (for sensor power adjustment)
+ * @return ESP_OK on success
+ */
+esp_err_t lora_send_weather_ack(uint8_t dest_id, uint8_t sequence, int8_t rssi);
+
+/**
+ * @brief Check and retry pending config if needed
+ * Call this periodically from main loop
+ */
+void lora_config_retry_check(void);
 
 /**
  * @brief Enable/disable adaptive TX power
@@ -283,22 +343,15 @@ void lora_set_weather_ack_callback(lora_weather_ack_cb_t callback);
 void lora_set_adaptive_power(bool enable);
 
 /**
+ * @brief Enable/disable high power mode
+ * @param enable true to allow TX power above 2dBm
+ */
+void lora_set_high_power(bool enable);
+
+/**
  * @brief Get suggested TX power based on recent link quality
  * @return Suggested power level in dBm
  */
 uint8_t lora_get_suggested_power(void);
 
-/**
- * @brief Get the current TX power setting
- * @return Current TX power in dBm
- */
-uint8_t lora_get_current_power(void);
-
-/**
- * @brief Get the last received RSSI
- * @return RSSI in dBm
- */
-int8_t lora_get_last_rssi(void);
-
 #endif // LORA_H
-

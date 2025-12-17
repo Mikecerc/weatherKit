@@ -47,10 +47,11 @@
 // =============================================================================
 // Message Types
 // =============================================================================
-#define MSG_TYPE_WEATHER_DATA   0x01    // Remote -> Base: Sensor readings + config echo
-#define MSG_TYPE_WEATHER_ACK    0x02    // Base -> Remote: Weather received ACK (clears lightning)
-#define MSG_TYPE_CONFIG         0x03    // Base -> Remote: Configuration update
-#define MSG_TYPE_CONFIG_ACK     0x04    // Remote -> Base: Config received acknowledgment
+#define MSG_TYPE_WEATHER_DATA       0x01    // Remote -> Base: Sensor readings + config echo
+#define MSG_TYPE_WEATHER_ACK        0x02    // Base -> Remote: Weather received ACK (clears lightning)
+#define MSG_TYPE_CONFIG             0x03    // Base -> Remote: Configuration update
+#define MSG_TYPE_CONFIG_ACK         0x04    // Remote -> Base: Config received acknowledgment
+#define MSG_TYPE_WEATHER_ACK_ACK    0x05    // Remote -> Base: Confirms lightning cleared (three-way handshake)
 
 // Legacy types (deprecated - kept for compatibility during transition)
 #define MSG_TYPE_SENSOR_STATUS  0x10    // DEPRECATED: Use weather packets as heartbeat
@@ -240,6 +241,16 @@ typedef struct __attribute__((packed)) {
     uint8_t base_tx_power;      // Base's current TX power
     uint8_t suggested_power;    // Suggested TX power for sensor
 } weather_ack_payload_t;
+
+/**
+ * @brief Weather ACK-ACK payload (Remote -> Base)
+ * Confirms sensor received ACK and cleared lightning data
+ * Three-way handshake: Weather -> ACK -> ACK-ACK
+ */
+typedef struct __attribute__((packed)) {
+    uint8_t acked_sequence;     // ACK sequence being acknowledged
+    uint32_t lightning_total;   // Running total of lightning strikes (confirms sync)
+} weather_ack_ack_payload_t;
 
 /**
  * @brief Config acknowledgment payload (Remote -> Base)

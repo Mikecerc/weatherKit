@@ -97,6 +97,12 @@ static uint8_t tx_sequence = 0;
 static SemaphoreHandle_t rx_semaphore = NULL;
 static volatile bool rx_done_flag = false;
 
+// Adaptive power state (used by lora_update_power and packet handlers)
+static bool adaptive_power_enabled = false;
+static bool high_power_enabled = false;
+static int8_t recent_rssi = -100;  // Track recent link quality
+static uint8_t current_tx_power = LORA_TX_POWER_LOW;
+
 // =============================================================================
 // Interrupt Handler
 // =============================================================================
@@ -374,19 +380,56 @@ void lora_set_frequency(long frequency)
 
 void lora_set_tx_power(int level)
 {
+    // PA config should be changed in standby mode
+    lora_idle();
+    
     if (level < 2) level = 2;
     else if (level > 17) level = 17;
     
-    write_reg(REG_PA_CONFIG, PA_BOOST | (level - 2));
-    ESP_LOGI(TAG, "TX power set to %d dBm", level);
+    // PA_BOOST for +2 to +17 dBm
+    uint8_t pa_config = PA_BOOST | (level - 2);
+    write_reg(REG_PA_CONFIG, pa_config);
+    status.tx_power = level;
+    
+    // Small delay to let PA stabilize
+    vTaskDelay(pdMS_TO_TICKS(5));
+    
+    // Read back and verify
+    uint8_t readback = read_reg(REG_PA_CONFIG);
+    if (readback != pa_config) {
+        ESP_LOGE(TAG, "TX power MISMATCH! Wrote 0x%02X, read 0x%02X", pa_config, readback);
+    } else {
+        ESP_LOGI(TAG, "TX power set to %d dBm (PA_CONFIG=0x%02X verified)", level, readback);
+    }
 }
 
 void lora_update_power(void)
 {
     bool high_power = ui_is_sensor_high_power();
-    int power = high_power ? LORA_TX_POWER_HIGH : LORA_TX_POWER_LOW;
-    lora_set_tx_power(power);
+    
+    // Update the high power mode flag (affects adaptive power ceiling)
+    lora_set_high_power(high_power);
     status.high_power = high_power;
+    
+    // If adaptive power is enabled, recalculate power based on current RSSI
+    // Otherwise, set fixed power based on mode
+    if (adaptive_power_enabled && recent_rssi != 0) {
+        uint8_t new_power = calculate_adaptive_power_limited(recent_rssi, high_power);
+        if (new_power != current_tx_power) {
+            current_tx_power = new_power;
+            lora_set_tx_power(current_tx_power);
+            ESP_LOGI(TAG, "Power recalculated: %d dBm (RSSI=%d, high_power=%d)",
+                     current_tx_power, recent_rssi, high_power);
+        } else {
+            // Ensure status is synced even if power didn't change
+            status.tx_power = current_tx_power;
+        }
+    } else {
+        // Fixed power mode or no RSSI data yet - use mode-appropriate default
+        int power = high_power ? LORA_TX_POWER_HIGH : LORA_TX_POWER_LOW;
+        current_tx_power = power;
+        lora_set_tx_power(power);
+    }
 }
 
 void lora_set_spreading_factor(int sf)
@@ -461,6 +504,11 @@ esp_err_t lora_send_packet(const uint8_t *buf, int size)
     lora_update_power();
 
     lora_idle();
+    
+    // Log the packet being sent
+    ESP_LOGI(TAG, "TX %d bytes: %02X %02X %02X %02X %02X %02X ...",
+             size, buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]);
+    
     write_reg(REG_FIFO_ADDR_PTR, 0);
 
     // Write data to FIFO
@@ -468,6 +516,14 @@ esp_err_t lora_send_packet(const uint8_t *buf, int size)
         write_reg(REG_FIFO, buf[i]);
     }
     write_reg(REG_PAYLOAD_LENGTH, size);
+
+    // Log current config before TX
+    uint8_t freq_msb = read_reg(0x06);
+    uint8_t freq_mid = read_reg(0x07);
+    uint8_t freq_lsb = read_reg(0x08);
+    uint8_t sync = read_reg(0x39);
+    ESP_LOGI(TAG, "TX config: Freq=0x%02X%02X%02X, Sync=0x%02X", 
+             freq_msb, freq_mid, freq_lsb, sync);
 
     // Start transmission
     write_reg(REG_OP_MODE, MODE_LONG_RANGE_MODE | MODE_TX);
@@ -867,6 +923,7 @@ int lora_receive_secure(uint8_t *src_id, uint8_t *msg_type,
 static lora_weather_cb_t weather_callback = NULL;
 static lora_status_cb_t status_callback = NULL;
 static lora_config_ack_cb_t config_ack_callback = NULL;
+static lora_weather_ack_ack_cb_t weather_ack_ack_callback = NULL;
 
 // Config retry state
 static config_payload_t pending_config;
@@ -874,11 +931,16 @@ static bool config_pending = false;
 static uint8_t config_retry_count = 0;
 static int64_t config_last_send_us = 0;
 
-// Adaptive power state
-static bool adaptive_power_enabled = false;
-static bool high_power_enabled = false;
-static int8_t recent_rssi = -100;  // Track recent link quality
-static uint8_t current_tx_power = LORA_TX_POWER_LOW;
+// Weather ACK retry state (three-way handshake)
+// If ACK-ACK not received, resend the WEATHER_ACK
+static bool ack_pending = false;              // Waiting for ACK-ACK?
+static uint8_t ack_pending_dest_id = 0;       // Destination we sent ACK to
+static uint8_t ack_pending_sequence = 0;      // Sequence we ACKed
+static int8_t ack_pending_rssi = 0;           // RSSI to include in ACK
+static uint8_t ack_retry_count = 0;           // Current retry count
+static int64_t ack_last_send_us = 0;          // When we last sent the ACK
+#define ACK_RETRY_TIMEOUT_MS    1500          // Retry ACK after 1.5 seconds
+#define ACK_MAX_RETRIES         3             // Give up after 3 retries
 
 void lora_set_weather_callback(lora_weather_cb_t callback)
 {
@@ -895,10 +957,20 @@ void lora_set_config_ack_callback(lora_config_ack_cb_t callback)
     config_ack_callback = callback;
 }
 
+void lora_set_weather_ack_ack_callback(lora_weather_ack_ack_cb_t callback)
+{
+    weather_ack_ack_callback = callback;
+}
+
 void lora_set_adaptive_power(bool enable)
 {
     adaptive_power_enabled = enable;
     ESP_LOGI(TAG, "Adaptive power %s", enable ? "enabled" : "disabled");
+    
+    // Recalculate power immediately when adaptive power is enabled
+    if (enable) {
+        lora_update_power();
+    }
 }
 
 void lora_set_high_power(bool enable)
@@ -930,11 +1002,13 @@ static void apply_adaptive_power(void)
 {
     if (!adaptive_power_enabled) return;
     
-    uint8_t suggested = lora_get_suggested_power();
+    // Use the limited version that respects high power mode
+    uint8_t suggested = calculate_adaptive_power_limited(recent_rssi, high_power_enabled);
     if (suggested != current_tx_power) {
         current_tx_power = suggested;
         lora_set_tx_power(current_tx_power);
-        ESP_LOGI(TAG, "Adaptive power: RSSI=%d -> TX=%d dBm", recent_rssi, current_tx_power);
+        ESP_LOGI(TAG, "Adaptive power: RSSI=%d -> TX=%d dBm (high_power=%d)", 
+                 recent_rssi, current_tx_power, high_power_enabled);
     }
 }
 
@@ -989,8 +1063,21 @@ esp_err_t lora_send_weather_ack(uint8_t dest_id, uint8_t sequence, int8_t rssi)
     
     ESP_LOGD(TAG, "Sending WEATHER_ACK: seq=%d, rssi=%d, suggested_power=%d",
              sequence, rssi, ack.suggested_power);
-    return lora_send_secure(dest_id, MSG_TYPE_WEATHER_ACK,
+    
+    esp_err_t ret = lora_send_secure(dest_id, MSG_TYPE_WEATHER_ACK,
                             (const uint8_t *)&ack, sizeof(weather_ack_payload_t));
+    
+    // Track this ACK for retry if ACK-ACK not received
+    if (ret == ESP_OK) {
+        ack_pending = true;
+        ack_pending_dest_id = dest_id;
+        ack_pending_sequence = sequence;
+        ack_pending_rssi = rssi;
+        ack_retry_count = 0;
+        ack_last_send_us = esp_timer_get_time();
+    }
+    
+    return ret;
 }
 
 /**
@@ -1016,6 +1103,47 @@ void lora_config_retry_check(void)
         } else {
             ESP_LOGW(TAG, "Config failed after %d retries", MAX_RETRIES);
             config_pending = false;
+        }
+    }
+}
+
+/**
+ * @brief Check and retry pending WEATHER_ACK if ACK-ACK not received
+ * Call this periodically from main loop (three-way handshake)
+ * 
+ * Flow: Weather -> WEATHER_ACK -> ACK-ACK
+ * If ACK-ACK not received, resend WEATHER_ACK so sensor retries clearing data
+ */
+void lora_ack_retry_check(void)
+{
+    if (!ack_pending) return;
+    
+    int64_t now = esp_timer_get_time();
+    int64_t elapsed_ms = (now - ack_last_send_us) / 1000;
+    
+    if (elapsed_ms >= ACK_RETRY_TIMEOUT_MS) {
+        if (ack_retry_count < ACK_MAX_RETRIES) {
+            ack_retry_count++;
+            ack_last_send_us = now;
+            
+            ESP_LOGI(TAG, "WEATHER_ACK retry %d/%d (seq=%d, dest=0x%02X)", 
+                     ack_retry_count, ACK_MAX_RETRIES, ack_pending_sequence, ack_pending_dest_id);
+            
+            // Resend the ACK
+            weather_ack_payload_t ack = {
+                .acked_sequence = ack_pending_sequence,
+                .base_rssi = ack_pending_rssi,
+                .base_snr = (int8_t)(status.last_snr * 4),
+                .base_tx_power = current_tx_power,
+                .suggested_power = calculate_adaptive_power_limited(ack_pending_rssi, high_power_enabled)
+            };
+            lora_send_secure(ack_pending_dest_id, MSG_TYPE_WEATHER_ACK,
+                            (const uint8_t *)&ack, sizeof(weather_ack_payload_t));
+        } else {
+            // Give up - sensor likely received it but ACK-ACK got lost
+            // The lightning will be recorded on next weather packet anyway
+            ESP_LOGW(TAG, "ACK-ACK not received after %d retries - assuming success", ACK_MAX_RETRIES);
+            ack_pending = false;
         }
     }
 }
@@ -1078,7 +1206,7 @@ bool lora_process_rx(void)
                     ESP_LOGI(TAG, "Config confirmed by sensor");
                 }
                 
-                // Update base power based on sensor feedback
+                // Update base power based on sensor feedback (if adaptive power enabled)
                 if (adaptive_power_enabled) {
                     uint8_t new_power = calculate_adaptive_power_limited(ack->sensor_rssi, high_power_enabled);
                     if (new_power != current_tx_power) {
@@ -1092,6 +1220,19 @@ bool lora_process_rx(void)
                 // Call user callback if registered
                 if (config_ack_callback) {
                     config_ack_callback(ack);
+                }
+            }
+            break;
+        
+        case MSG_TYPE_WEATHER_ACK_ACK:
+            if (len >= sizeof(weather_ack_ack_payload_t)) {
+                const weather_ack_ack_payload_t *ack_ack = (const weather_ack_ack_payload_t *)payload;
+                ESP_LOGI(TAG, "WEATHER_ACK_ACK received: seq=%d, lightning_total=%lu",
+                         ack_ack->acked_sequence, (unsigned long)ack_ack->lightning_total);
+                
+                // Call user callback if registered
+                if (weather_ack_ack_callback) {
+                    weather_ack_ack_callback(ack_ack);
                 }
             }
             break;

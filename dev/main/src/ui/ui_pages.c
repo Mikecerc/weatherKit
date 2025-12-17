@@ -264,6 +264,7 @@ void ui_draw_storm_tracker(void)
 /**
  * @brief Draw the sensor status page
  * Shows: last RX time, sensor config, RSSI/TX power for both base and sensor, uptime
+ * Uses scrolling with right button to show all info
  */
 void ui_draw_sensor_status(void)
 {
@@ -271,59 +272,91 @@ void ui_draw_sensor_status(void)
     const weather_data_t *weather = ui_get_cached_weather();
     lora_status_t lora_status;
     lora_get_status(&lora_status);
+    int scroll = ui_get_sensor_status_scroll();
     
-    // Title
-    ui_draw_string(22, 2, "Sensor Status");
+    // Title with scroll indicator
+    if (scroll == 0) {
+        ui_draw_string(22, 2, "Sensor Status");
+    } else {
+        ui_draw_string(18, 2, "Sensor Status 2");
+    }
     ui_draw_hline(0, 12, 128);
     
-    // Remote sensor status and last RX time
-    if (weather->sensor_connected && weather->last_rx_time_ms > 0) {
-        uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-        uint32_t elapsed_sec = (now_ms - weather->last_rx_time_ms) / 1000;
-        if (elapsed_sec < 60) {
-            snprintf(buf, sizeof(buf), "Last RX: %lus ago", (unsigned long)elapsed_sec);
+    if (scroll == 0) {
+        // Page 1: Basic info
+        if (weather->sensor_connected && weather->last_rx_time_ms > 0) {
+            uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            uint32_t elapsed_sec = (now_ms - weather->last_rx_time_ms) / 1000;
+            if (elapsed_sec < 60) {
+                snprintf(buf, sizeof(buf), "Last RX: %lus ago", (unsigned long)elapsed_sec);
+            } else {
+                snprintf(buf, sizeof(buf), "Last RX: %lum ago", (unsigned long)(elapsed_sec / 60));
+            }
+            ui_draw_string(4, 16, buf);
+            
+            // Sensor uptime in h:mm format
+            uint32_t uptime = weather->sensor_uptime_sec;
+            uint32_t hours = uptime / 3600;
+            uint32_t minutes = (uptime % 3600) / 60;
+            snprintf(buf, sizeof(buf), "Uptime: %lu:%02lu", 
+                     (unsigned long)hours, (unsigned long)minutes);
+            ui_draw_string(4, 26, buf);
+            
+            // Sensor config (update interval, power mode)
+            const char *pwr_mode = weather->sensor_high_power ? "HiPwr" : "LoPwr";
+            snprintf(buf, sizeof(buf), "Cfg: %ds %s", 
+                     weather->sensor_update_interval, pwr_mode);
+            ui_draw_string(4, 36, buf);
         } else {
-            snprintf(buf, sizeof(buf), "Last RX: %lum ago", (unsigned long)(elapsed_sec / 60));
+            ui_draw_string(4, 16, "Sensor: N/A");
+            ui_draw_string(4, 26, "Uptime: N/A");
+            ui_draw_string(4, 36, "Cfg: N/A");
         }
-        ui_draw_string(4, 16, buf);
         
-        // Sensor uptime in h:mm format
-        uint32_t uptime = weather->sensor_uptime_sec;
-        uint32_t hours = uptime / 3600;
-        uint32_t minutes = (uptime % 3600) / 60;
-        snprintf(buf, sizeof(buf), "Uptime: %lu:%02lu", 
-                 (unsigned long)hours, (unsigned long)minutes);
-        ui_draw_string(4, 26, buf);
+        ui_draw_string(4, 50, "R:more");
     } else {
-        ui_draw_string(4, 16, "Sensor: N/A");
-        ui_draw_string(4, 26, "Uptime: N/A");
-    }
-    
-    // Sensor config (update interval, power mode)
-    if (weather->sensor_connected) {
-        const char *pwr_mode = weather->sensor_high_power ? "HiPwr" : "LoPwr";
-        snprintf(buf, sizeof(buf), "Cfg: %ds %s", 
-                 weather->sensor_update_interval, pwr_mode);
-        ui_draw_string(4, 36, buf);
-    }
-    
-    // Link quality - both directions
-    if (lora_status.initialized && lora_status.packets_received > 0) {
-        // Base receiving from sensor
-        snprintf(buf, sizeof(buf), "B<-S: %ddBm @%ddB", 
-                 weather->base_rssi, lora_status.tx_power);
-        ui_draw_string(4, 46, buf);
-        
-        // Sensor receiving from base (if we have the data)
-        if (weather->sensor_rssi != 0) {
-            snprintf(buf, sizeof(buf), "S<-B: %ddBm @%ddB",
-                     weather->sensor_rssi, weather->sensor_tx_power);
-            ui_draw_string(4, 56, buf);
+        // Page 2: Link quality details (more compact layout)
+        if (lora_status.initialized && lora_status.packets_received > 0) {
+            // Sensor TX -> Base RX (what base received from sensor)
+            snprintf(buf, sizeof(buf), "S->B:%ddB TX:%ddB", 
+                     weather->base_rssi, weather->sensor_tx_power);
+            ui_draw_string(4, 16, buf);
+            
+            // Base TX -> Sensor RX (what sensor received from base)
+            if (weather->sensor_rssi != 0) {
+                snprintf(buf, sizeof(buf), "B->S:%ddB TX:%ddB", 
+                         weather->sensor_rssi, lora_status.tx_power);
+                ui_draw_string(4, 26, buf);
+            } else {
+                ui_draw_string(4, 26, "B->S: awaiting ACK");
+            }
+            
+            // Signal strength based on worst RSSI of both directions
+            int8_t worst_rssi = weather->base_rssi;
+            if (weather->sensor_rssi != 0 && weather->sensor_rssi < worst_rssi) {
+                worst_rssi = weather->sensor_rssi;
+            }
+            const char *strength;
+            if (worst_rssi >= -50) {
+                strength = "Excellent";
+            } else if (worst_rssi >= -70) {
+                strength = "Good";
+            } else if (worst_rssi >= -85) {
+                strength = "Fair";
+            } else if (worst_rssi >= -100) {
+                strength = "Weak";
+            } else {
+                strength = "Very Weak";
+            }
+            snprintf(buf, sizeof(buf), "Signal: %s", strength);
+            ui_draw_string(4, 36, buf);
+        } else if (lora_status.initialized) {
+            ui_draw_string(4, 16, "Awaiting data...");
+        } else {
+            ui_draw_string(4, 16, "LoRa: Not init");
         }
-    } else if (lora_status.initialized) {
-        ui_draw_string(4, 46, "Awaiting data...");
-    } else {
-        ui_draw_string(4, 46, "LoRa: Not init");
+        
+        ui_draw_string(4, 48, "R:back");
     }
     
     ui_draw_page_indicator();
