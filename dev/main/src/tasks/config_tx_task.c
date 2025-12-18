@@ -75,28 +75,8 @@ void config_tx_task(void *pvParameters)
     config_request_t req;
     
     while (1) {
-        // Check for initial config sync (after first weather packet received)
-        if (config_tx_needs_sync()) {
-            config_payload_t config = {
-                .update_interval = ui_get_refresh_rate(),
-                .tx_power = ui_is_sensor_high_power() ? TX_POWER_HIGH : TX_POWER_LOW,
-                .flags = CFG_ADAPTIVE_POWER | (ui_is_sensor_high_power() ? CFG_HIGH_POWER : 0),
-                .config_sequence = ++config_sequence
-            };
-            
-            if (xSemaphoreTake(lora_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-                esp_err_t err = lora_send_config(LORA_DEVICE_ID_REMOTE, &config);
-                xSemaphoreGive(lora_mutex);
-                
-                if (err == ESP_OK) {
-                    ESP_LOGI(TAG, "Initial config sync sent: interval=%ds, power=%d, flags=0x%02X", 
-                             config.update_interval, config.tx_power, config.flags);
-                    config_tx_mark_synced();
-                } else {
-                    ESP_LOGW(TAG, "Initial config sync failed: %s (will retry)", esp_err_to_name(err));
-                }
-            }
-        }
+        // Note: Removed initial config sync - sensor now persists its own config in NVS
+        // Config is only sent when user explicitly changes settings in the UI
         
         // Check for UI-triggered config changes
         if (ui_check_config_pending()) {

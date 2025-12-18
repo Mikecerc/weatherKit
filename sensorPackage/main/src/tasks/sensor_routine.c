@@ -45,13 +45,22 @@ esp_err_t sensor_routine_init(const sensor_config_t *config)
         return err;
     }
     
+    ESP_LOGW(TAG, "After task_common_init: g_current_config.interval=%d", 
+             g_current_config.update_interval_sec);
+    
     // Apply provided configuration
     if (config != NULL) {
+        ESP_LOGW(TAG, "Overwriting config with provided values!");
         if (xSemaphoreTake(g_config_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
             memcpy(&g_current_config, config, sizeof(sensor_config_t));
             xSemaphoreGive(g_config_mutex);
         }
+    } else {
+        ESP_LOGW(TAG, "config is NULL - keeping NVS-loaded values");
     }
+    
+    ESP_LOGW(TAG, "After config apply: g_current_config.interval=%d", 
+             g_current_config.update_interval_sec);
     
     // Initialize LED
     err = led_init();
