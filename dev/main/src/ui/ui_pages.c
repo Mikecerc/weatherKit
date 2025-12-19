@@ -75,7 +75,7 @@ void ui_draw_main_page(void)
     }
     
     // Help hint at bottom right
-    ui_draw_string(100, 57, "hL:?");
+    ui_draw_string(100, 57, "hR:?");
     
     ui_draw_page_indicator();
 }
@@ -313,7 +313,7 @@ void ui_draw_sensor_status(void)
             ui_draw_string(4, 36, "Cfg: N/A");
         }
         
-        ui_draw_string(4, 50, "R:more");
+        ui_draw_string(4, 50, "L:more");
     } else {
         // Page 2: Link quality details (more compact layout)
         if (lora_status.initialized && lora_status.packets_received > 0) {
@@ -356,7 +356,7 @@ void ui_draw_sensor_status(void)
             ui_draw_string(4, 16, "LoRa: Not init");
         }
         
-        ui_draw_string(4, 48, "R:back");
+        ui_draw_string(4, 48, "L:back");
     }
     
     ui_draw_page_indicator();
@@ -424,9 +424,9 @@ void ui_draw_settings_page(void)
     
     // Tooltip above page indicator (y=50)
     if (edit_mode) {
-        ui_draw_string(4, 50, "L:next R:set hR:exit");
+        ui_draw_string(4, 50, "R:next L:set hL:exit");
     } else {
-        ui_draw_string(4, 50, "R:edit hR:back      ");
+        ui_draw_string(4, 50, "L:edit hL:back      ");
     }
     
     ui_draw_page_indicator();
@@ -443,7 +443,7 @@ void ui_draw_about(void)
     ui_draw_string(4, 18, "WeatherKit v1.0");
     ui_draw_string(4, 28, "ESP32-S3 Weather");
     ui_draw_string(4, 38, "Station");
-    ui_draw_string(4, 50, "Hold R to go back");
+    ui_draw_string(4, 50, "Hold L to go back");
 }
 
 /**
@@ -459,5 +459,5 @@ void ui_draw_lora_confirm(void)
     ui_draw_string(4, 36, "without an antenna!");
     
     ui_draw_hline(0, 48, 128);
-    ui_draw_string(4, 52, "R:Enable  L:Cancel");
+    ui_draw_string(4, 52, "L:Enable  R:Cancel");
 }

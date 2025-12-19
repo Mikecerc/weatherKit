@@ -77,16 +77,16 @@ static void button_callback(button_event_t event)
     // Normal operation
     switch (event) {
         case BUTTON_LEFT_SHORT:
-            ui_cycle();
-            break;
-        case BUTTON_LEFT_LONG:
-            ui_show_info();
-            break;
-        case BUTTON_RIGHT_SHORT:
             ui_select();
             break;
-        case BUTTON_RIGHT_LONG:
+        case BUTTON_LEFT_LONG:
             ui_back();
+            break;
+        case BUTTON_RIGHT_SHORT:
+            ui_cycle();
+            break;
+        case BUTTON_RIGHT_LONG:
+            ui_show_info();
             break;
         case BUTTON_BOTH_LONG:
             ui_enter_standby();

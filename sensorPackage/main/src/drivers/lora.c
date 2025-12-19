@@ -160,7 +160,7 @@ static void write_reg(int reg, int val)
 static int read_reg(int reg)
 {
     uint8_t out[2] = { reg, 0xff };
-    uint8_t in[2];
+    uint8_t in[2] = { 0, 0 };
 
     spi_transaction_t t = {
         .flags = 0,
@@ -170,8 +170,14 @@ static int read_reg(int reg)
     };
 
     gpio_set_level(PIN_LORA_NSS, 0);
-    spi_device_transmit(spi_handle, &t);
+    esp_err_t ret = spi_device_transmit(spi_handle, &t);
     gpio_set_level(PIN_LORA_NSS, 1);
+    
+    // Debug: log SPI transaction for version register
+    if (reg == 0x42) {
+        ESP_LOGI(TAG, "SPI DEBUG: reg=0x%02X, tx=[0x%02X,0x%02X], rx=[0x%02X,0x%02X], ret=%s",
+                 reg, out[0], out[1], in[0], in[1], esp_err_to_name(ret));
+    }
     
     return in[1];
 }
@@ -181,10 +187,12 @@ static int read_reg(int reg)
  */
 static void hardware_reset(void)
 {
+    ESP_LOGI(TAG, "Performing hardware reset (RST pin = GPIO %d)", PIN_LORA_RST);
     gpio_set_level(PIN_LORA_RST, 0);
-    vTaskDelay(pdMS_TO_TICKS(1));
+    vTaskDelay(pdMS_TO_TICKS(10));  // Hold reset longer
     gpio_set_level(PIN_LORA_RST, 1);
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(20));  // Wait longer for chip to stabilize
+    ESP_LOGI(TAG, "Hardware reset complete");
 }
 
 // =============================================================================
@@ -196,6 +204,8 @@ esp_err_t lora_init(void)
     esp_err_t ret;
 
     ESP_LOGI(TAG, "Initializing LoRa module...");
+    ESP_LOGI(TAG, "Pin config: SCK=%d, MISO=%d, MOSI=%d, NSS=%d, RST=%d, DIO0=%d",
+             PIN_LORA_SCK, PIN_LORA_MISO, PIN_LORA_MOSI, PIN_LORA_NSS, PIN_LORA_RST, PIN_LORA_DIO0);
 
     // Configure GPIO pins
     gpio_reset_pin(PIN_LORA_RST);

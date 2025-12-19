@@ -40,9 +40,9 @@ static void ui_draw_info_header(const char *title, int page_num, int total_pages
 static void ui_draw_info_footer(int total_pages)
 {
     if (total_pages > 1) {
-        ui_draw_string(4, 57, "L:next  R:exit");
+        ui_draw_string(4, 57, "R:next  L:exit");
     } else {
-        ui_draw_string(4, 57, "R:exit");
+        ui_draw_string(4, 57, "L:exit");
     }
 }
 
