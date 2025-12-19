@@ -624,7 +624,7 @@ graph TB
 flowchart TD
     subgraph task_config_save
         OPEN[nvs_open sensor_cfg RW] --> WRITE_INT[nvs_set_u16 interval]
-        WRITE_INT --> BUILD_FLAGS[flags = adaptive | high_power << 1]
+        WRITE_INT --> BUILD_FLAGS["flags = adaptive OR high_power << 1"]
         BUILD_FLAGS --> WRITE_FLAGS[nvs_set_u8 flags]
         WRITE_FLAGS --> COMMIT[nvs_commit]
         COMMIT --> CLOSE[nvs_close]
@@ -637,7 +637,7 @@ flowchart TD
         VALID -->|No| SKIP_INT[Keep default]
         APPLY_INT --> READ_FLAGS[nvs_get_u8 flags]
         SKIP_INT --> READ_FLAGS
-        READ_FLAGS --> APPLY_FLAGS[g_current_config.adaptive = flags & 1<br/>g_current_config.high_power = flags & 2]
+        READ_FLAGS --> APPLY_FLAGS["adaptive = flags AND 1<br/>high_power = flags AND 2"]
         APPLY_FLAGS --> CLOSE2[nvs_close]
     end
 ```
