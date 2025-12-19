@@ -1,0 +1,4 @@
+dependencies:
+  idf: '>=5.0'
+  espressif/aht20: ^2.0.0
+

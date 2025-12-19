@@ -1,11 +1,24 @@
-idf_component_register(SRCS "main.c" 
-                            "drivers/display.c" 
-                            "drivers/buttons.c"
-                            "drivers/lora.c"
-                            "ui/ui.c"
-                            "ui/ui_pages.c"
-                            "ui/ui_info.c"
-                            "weather/weather_calc.c" 
-                            "weather/storm_tracker.c"
-                    INCLUDE_DIRS "." "drivers" "ui" "weather"
-                    REQUIRES driver esp_timer nvs_flash)
+idf_component_register(
+    SRCS 
+        "src/main.c" 
+        "src/tasks/task_common.c"
+        "src/tasks/lora_rx_task.c"
+        "src/tasks/weather_ack_task.c"
+        "src/tasks/config_tx_task.c"
+        "src/tasks/ui_task.c"
+        "src/drivers/display.c" 
+        "src/drivers/buttons.c"
+        "src/drivers/lora.c"
+        "src/ui/ui.c"
+        "src/ui/ui_pages.c"
+        "src/ui/ui_info.c"
+        "src/weather/weather_calc.c" 
+        "src/weather/storm_tracker.c"
+    INCLUDE_DIRS 
+        "include" 
+        "include/drivers" 
+        "include/ui" 
+        "include/weather"
+        "include/tasks"
+    REQUIRES driver esp_timer nvs_flash
+)

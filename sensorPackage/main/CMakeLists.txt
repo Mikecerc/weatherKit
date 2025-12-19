@@ -1,6 +1,21 @@
-idf_component_register(SRCS "main.c"
-                            "sensor_routine.c"
-                            "drivers/lora.c"
-                            "drivers/led.c"
-                    INCLUDE_DIRS "." "drivers"
-                    REQUIRES driver esp_timer nvs_flash esp_driver_rmt)
+idf_component_register(
+    SRCS 
+        "src/main.c"
+        "src/tasks/sensor_routine.c"
+        "src/tasks/task_common.c"
+        "src/tasks/led_status_task.c"
+        "src/tasks/lora_rx_task.c"
+        "src/tasks/weather_tx_task.c"
+        "src/drivers/lora.c"
+        "src/drivers/led.c"
+        "src/drivers/i2c_init.c"      
+        "src/drivers/as3935.c"
+        "src/drivers/pressure_driver.c"
+        "src/drivers/aht20.c"
+        "src/drivers/buzzer.c"
+    INCLUDE_DIRS 
+        "include"
+        "include/drivers"
+        "include/tasks"
+    REQUIRES driver esp_timer nvs_flash
+)

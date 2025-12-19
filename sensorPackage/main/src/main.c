@@ -43,9 +43,7 @@ void app_main(void)
     
     ESP_LOGI(TAG, "NVS initialized");
     
-    // Initialize sensor routine
-    // Config will be loaded from NVS flash (or defaults if no saved config)
-    // Pass NULL to use saved/default config instead of hardcoding values
+    // Initialize sensor routine with NULL to use config from NVS (or defaults if first boot)
     ret = sensor_routine_init(NULL);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to initialize sensor routine: %s", esp_err_to_name(ret));
@@ -55,10 +53,6 @@ void app_main(void)
         return;
     }
     
-    // Get the loaded config for logging
-    sensor_config_t config;
-    sensor_routine_get_config(&config);
-    
     // Start sensor routine
     ret = sensor_routine_start();
     if (ret != ESP_OK) {
@@ -66,11 +60,7 @@ void app_main(void)
         return;
     }
     
-    ESP_LOGI(TAG, "Sensor package running!");
-    ESP_LOGI(TAG, "- Weather data interval: %d seconds", config.update_interval_sec);
-    ESP_LOGI(TAG, "- Adaptive power: %s", config.adaptive_power ? "enabled" : "disabled");
-    ESP_LOGI(TAG, "- High power mode: %s", config.high_power ? "enabled" : "disabled");
-    ESP_LOGI(TAG, "- Data source: %s", config.use_fake_data ? "FAKE" : "real sensors");
+    ESP_LOGI(TAG, "Sensor package running! (config loaded from NVS or defaults)");
     
     // Main loop - just monitor status
     while (1) {

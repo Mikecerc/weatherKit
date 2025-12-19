@@ -1,4 +1,10 @@
 {
+<<<<<<< HEAD
+    "idf.pythonInstallPath": "C:\\Users\\trsha\\.espressif\\tools\\idf-python\\3.11.2\\python.exe",
+    "idf.port": "/dev/ttyACM0",
+    "C_Cpp.errorSquiggles": "disabled"
+=======
     "idf.pythonInstallPath": "/home/mike/.pyenv/shims/python",
     "idf.port": "/dev/ttyACM0"
+>>>>>>> a79b699e4732d53f924e94b7514f3b0e58771170
 }
