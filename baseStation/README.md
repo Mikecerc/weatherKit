@@ -85,38 +85,20 @@ dev/
 
 The Base Station runs five concurrent FreeRTOS tasks:
 
-```mermaid
-graph TB
-    subgraph "Base Station - FreeRTOS Tasks"
-        subgraph "LoRa RX Task (Priority 6)"
-            RX1["Receive WEATHER packets"]
-            RX2["Dispatch callbacks"]
-            RX3["Track timeouts"]
-        end
-        
-        subgraph "Weather ACK Task (Priority 5)"
-            ACK1["Send ACKs"]
-            ACK2["Retry on timeout"]
-            ACK3["Handle ACK confirmation"]
-        end
-        
-        subgraph "Config TX Task (Priority 4)"
-            CFG1["Send config changes"]
-            CFG2["Send ping/locate"]
-            CFG3["Retry logic"]
-        end
-        
-        subgraph "UI Task (Priority 4)"
-            UI1["Update display"]
-            UI2["Handle weather queue"]
-        end
-        
-        subgraph "Button Task (Priority 5)"
-            BTN1["Poll buttons"]
-            BTN2["Debounce"]
-            BTN3["Trigger UI callbacks"]
-        end
-    end
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              Base Station Tasks                                   │
+├───────────────┬───────────────┬───────────────┬───────────────┬─────────────────┤
+│ LoRa RX Task  │ Weather ACK   │ Config TX     │   UI Task     │  Button Task    │
+│  (Priority 6) │   Task (P5)   │  Task (P4)    │  (Priority 4) │  (Priority 5)   │
+├───────────────┼───────────────┼───────────────┼───────────────┼─────────────────┤
+│ • Receive     │ • Send ACKs   │ • Send config │ • Update      │ • Poll buttons  │
+│   WEATHER     │ • Retry on    │   changes     │   display     │ • Debounce      │
+│ • Dispatch    │   timeout     │ • Send ping/  │ • Handle      │ • Detect short/ │
+│   callbacks   │ • Handle ACK  │   locate      │   weather     │   long press    │
+│ • Track       │   confirmation│ • Retry logic │   queue       │ • Trigger UI    │
+│   timeouts    │               │               │               │   callbacks     │
+└───────────────┴───────────────┴───────────────┴───────────────┴─────────────────┘
 ```
 
 ### LoRa RX Task
@@ -179,21 +161,25 @@ The UI consists of multiple pages accessible via button navigation:
 
 ### UI State Machine
 
-```mermaid
-stateDiagram-v2
-    [*] --> MainPages
-    
-    MainPages --> InfoView: Right (long)
-    MainPages --> SettingsEdit: Select Settings
-    MainPages --> SensorScroll: Sensor Status
-    
-    InfoView --> MainPages: Left (long)
-    
-    SettingsEdit --> LoRaConfirm: Confirm action
-    SettingsEdit --> AboutView: Select About
-    
-    LoRaConfirm --> MainPages: Complete
-    AboutView --> MainPages: Back
+```
+                         ┌─────────────┐
+                         │  Main Pages │◄────────────────┐
+                         └──────┬──────┘                 │
+                                │                        │
+           ┌────────────────────┼────────────────────┐   │
+           │                    │                    │   │
+           ▼                    ▼                    ▼   │
+    ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+    │  Info View  │     │Settings Edit│     │Sensor Scroll│
+    └──────┬──────┘     └──────┬──────┘     └─────────────┘
+           │                   │
+           │            ┌──────┴──────┐
+           │            ▼             ▼
+           │     ┌─────────────┐ ┌─────────────┐
+           │     │LoRa Confirm │ │ About View  │
+           │     └─────────────┘ └─────────────┘
+           │                          │
+           └──────────────────────────┘
 ```
 
 ### Settings Menu
@@ -243,19 +229,22 @@ Echoes applied configuration
 
 The protocol ensures reliable lightning data delivery:
 
-```mermaid
-sequenceDiagram
-    participant Sensor
-    participant Base Station
-    
-    Sensor->>Base Station: WEATHER (with pending lightning data)
-    Note over Base Station: Store pending lightning data
-    
-    Base Station->>Sensor: WEATHER_ACK (RSSI, sequence)
-    Note over Sensor: Clear pending counts
-    
-    Sensor->>Base Station: WEATHER_ACK_ACK (confirmed)
-    Note over Base Station: Commit lightning to storm tracker
+```
+     Sensor                    Base Station
+        │                           │
+        │──── WEATHER ─────────────►│
+        │     (with pending         │  Store pending
+        │      lightning data)      │  lightning data
+        │                           │
+        │◄─── WEATHER_ACK ──────────│
+        │     (RSSI, sequence)      │
+   Clear│                           │
+   pending                          │
+   counts│                          │
+        │                           │
+        │──── WEATHER_ACK_ACK ─────►│
+        │     (confirmed)           │  Commit lightning
+        │                           │  to storm tracker
 ```
 
 ## 🌩️ Storm Tracking
@@ -265,26 +254,6 @@ The Base Station maintains historical lightning data:
 - Rolling averages and trends
 - Storm intensity classification
 - Visual lightning map display
-
-## 🔋 Power System
-
-### 18650 Battery Power
-The Base Station is powered by a single 18650 lithium-ion cell with integrated power management:
-
-```mermaid
-graph LR
-    A["18650 Cell<br/>3.7V nominal"] --> B["Charge Controller<br/>+ Buck-Boost"]
-    B --> C["3.3V Regulated<br/>Output"]
-    C --> D["ESP32-S3"]
-    C --> E["OLED Display"]
-    C --> F["LoRa Module"]
-```
-
-| Component | Description |
-|-----------|-------------|
-| **18650 Cell** | 3.7V nominal, 2600-3500mAh typical capacity |
-| **Charge Controller** | TP4056 or similar with protection circuitry |
-| **Buck-Boost Regulator** | Maintains stable 3.3V from 2.5V-4.2V input range |
 
 ## ⚙️ Configuration
 
@@ -298,14 +267,36 @@ graph LR
 - Power modes
 - Locate buzzer
 
-## 🛠️ Building & Flashing
+## � Power System
+
+### 18650 Battery Power
+The Base Station is powered by a single 18650 lithium-ion cell with integrated power management:
+
+```mermaid
+graph LR
+    A["18650 Cell<br/>3.7V nominal"] --> B["Charge Controller<br/>+ Buck-Boost"]
+    B --> C["5V Output"]
+    C --> D["Onboard 3.3V LDO"]
+    D --> E["ESP32-S3"]
+    D --> F["OLED Display"]
+    D --> G["LoRa Module"]
+```
+
+| Component | Description |
+|-----------|-------------|
+| **18650 Cell** | 3.7V nominal, 2600-3500mAh typical capacity |
+| **Charge Controller** | TP4056 or similar with protection circuitry |
+| **Buck-Boost Regulator** | Outputs stable 5V from 2.5V-4.2V input range |
+| **Onboard LDO** | ESP32 dev board's 3.3V regulator (fed from 5V) |
+
+## �🛠️ Building & Flashing
 
 ```bash
 # Set up ESP-IDF environment
 . $IDF_PATH/export.sh
 
 # Navigate to base station directory
-cd dev
+cd baseStation
 
 # Build the project
 idf.py build
@@ -318,6 +309,9 @@ idf.py -p /dev/ttyUSB0 monitor
 
 # Build, flash, and monitor in one command
 idf.py -p /dev/ttyUSB0 flash monitor
+
+# Or use the build script from the project root:
+./build.sh flash-monitor -p base
 ```
 
 ## 🐛 Debugging
@@ -349,28 +343,32 @@ I (31234) weather_ack: Sending ACK for seq 42
 
 ## 📊 Data Flow
 
-```mermaid
-graph TB
-    subgraph "Base Station"
-        ANT["LoRa Antenna"]
-        RADIO["SX1278<br/>LoRa Radio"]
-        
-        ANT <--> RADIO
-        
-        RADIO --> LORA_RX["LoRa RX Task"]
-        LORA_RX --> WX_QUEUE["Weather Queue"]
-        LORA_RX --> WX_ACK["Weather ACK Task"]
-        
-        WX_QUEUE --> UI["UI Task"]
-        UI --> OLED["OLED Display"]
-        
-        BTN["Buttons"] --> BTN_TASK["Button Task"]
-        BTN_TASK --> UI
-        BTN_TASK --> CFG_TX["Config TX Task"]
-        
-        CFG_TX --> RADIO
-        WX_ACK --> STORM["Storm Tracker"]
-    end
+```
+                    ┌────────────────────────────────────────┐
+                    │            Base Station                 │
+                    │                                        │
+   LoRa Antenna     │  ┌─────────────┐    ┌──────────────┐  │
+        │           │  │ LoRa RX     │───►│ Weather      │  │
+        ▼           │  │ Task        │    │ Queue        │  │
+┌─────────────┐     │  └──────┬──────┘    └──────┬───────┘  │
+│ SX1278      │◄───►│         │                  │          │
+│ LoRa Radio  │     │         ▼                  ▼          │
+└─────────────┘     │  ┌─────────────┐    ┌──────────────┐  │
+                    │  │ Weather ACK │    │ UI Task      │──┼──► OLED
+                    │  │ Task        │    └──────▲───────┘  │    Display
+                    │  └─────────────┘           │          │
+                    │         ▲                  │          │
+                    │  ┌──────┴──────┐    ┌──────┴───────┐  │
+                    │  │ Config TX   │◄───│ Button Task  │◄─┼─── Buttons
+                    │  │ Task        │    └──────────────┘  │
+                    │  └─────────────┘                      │
+                    │         │                             │
+                    │         ▼                             │
+                    │  ┌─────────────┐                      │
+                    │  │ Storm       │                      │
+                    │  │ Tracker     │                      │
+                    │  └─────────────┘                      │
+                    └────────────────────────────────────────┘
 ```
 
 ## 📚 Related Documentation

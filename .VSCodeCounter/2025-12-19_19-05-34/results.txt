@@ -1,0 +1,139 @@
+Date : 2025-12-19 19:05:34
+Directory : /home/mike/code/weatherKit
+Total : 76 files,  8082 codes, 3110 comments, 2350 blanks, all 13542 lines
+
+Languages
++--------------------+------------+------------+------------+------------+------------+
+| language           | files      | code       | comment    | blank      | total      |
++--------------------+------------+------------+------------+------------+------------+
+| C                  |         30 |      6,196 |      1,381 |      1,551 |      9,128 |
+| C++                |         30 |      1,109 |      1,729 |        550 |      3,388 |
+| Markdown           |          3 |        620 |          0 |        229 |        849 |
+| CMake              |          5 |         66 |          0 |          4 |         70 |
+| JSON with Comments |          2 |         42 |          0 |          0 |         42 |
+| JSON               |          1 |         26 |          0 |          1 |         27 |
+| Docker             |          2 |         16 |          0 |         10 |         26 |
+| YAML               |          3 |          7 |          0 |          5 |         12 |
++--------------------+------------+------------+------------+------------+------------+
+
+Directories
++---------------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+| path                                                                            | files      | code       | comment    | blank      | total      |
++---------------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+| .                                                                               |         76 |      8,082 |      3,110 |      2,350 |     13,542 |
+| . (Files)                                                                       |          1 |          7 |          0 |          1 |          8 |
+| dev                                                                             |         37 |      3,957 |      1,564 |      1,078 |      6,599 |
+| dev (Files)                                                                     |          2 |         29 |          0 |         12 |         41 |
+| dev/.devcontainer                                                               |          2 |         29 |          0 |          5 |         34 |
+| dev/main                                                                        |         33 |      3,899 |      1,564 |      1,061 |      6,524 |
+| dev/main (Files)                                                                |          2 |         26 |          0 |          1 |         27 |
+| dev/main/include                                                                |         16 |        601 |        881 |        294 |      1,776 |
+| dev/main/include (Files)                                                        |          1 |         24 |         27 |         10 |         61 |
+| dev/main/include/drivers                                                        |          4 |        343 |        472 |        143 |        958 |
+| dev/main/include/tasks                                                          |          5 |         73 |        136 |         53 |        262 |
+| dev/main/include/ui                                                             |          4 |        114 |        172 |         65 |        351 |
+| dev/main/include/weather                                                        |          2 |         47 |         74 |         23 |        144 |
+| dev/main/src                                                                    |         15 |      3,272 |        683 |        766 |      4,721 |
+| dev/main/src (Files)                                                            |          1 |        114 |         40 |         24 |        178 |
+| dev/main/src/drivers                                                            |          4 |      1,371 |        292 |        338 |      2,001 |
+| dev/main/src/tasks                                                              |          5 |        500 |        139 |        138 |        777 |
+| dev/main/src/ui                                                                 |          3 |      1,038 |        179 |        199 |      1,416 |
+| dev/main/src/weather                                                            |          2 |        249 |         33 |         67 |        349 |
+| docs                                                                            |          1 |        576 |          0 |        207 |        783 |
+| sensorPackage                                                                   |         37 |      3,542 |      1,546 |      1,064 |      6,152 |
+| sensorPackage (Files)                                                           |          4 |         58 |          0 |         15 |         73 |
+| sensorPackage/.devcontainer                                                     |          2 |         29 |          0 |          5 |         34 |
+| sensorPackage/main                                                              |         31 |      3,455 |      1,546 |      1,044 |      6,045 |
+| sensorPackage/main (Files)                                                      |          3 |         73 |         25 |         16 |        114 |
+| sensorPackage/main/include                                                      |         14 |        508 |        848 |        256 |      1,612 |
+| sensorPackage/main/include (Files)                                              |          2 |         42 |        109 |         30 |        181 |
+| sensorPackage/main/include/drivers                                              |          8 |        395 |        609 |        176 |      1,180 |
+| sensorPackage/main/include/tasks                                                |          4 |         71 |        130 |         50 |        251 |
+| sensorPackage/main/src                                                          |         14 |      2,874 |        673 |        772 |      4,319 |
+| sensorPackage/main/src (Files)                                                  |          2 |        514 |        194 |        142 |        850 |
+| sensorPackage/main/src/drivers                                                  |          7 |      1,613 |        309 |        436 |      2,358 |
+| sensorPackage/main/src/tasks                                                    |          5 |        747 |        170 |        194 |      1,111 |
++---------------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+
+Files
++---------------------------------------------------------------------------------+--------------------+------------+------------+------------+------------+
+| filename                                                                        | language           | code       | comment    | blank      | total      |
++---------------------------------------------------------------------------------+--------------------+------------+------------+------------+------------+
+| /home/mike/code/weatherKit/CMakeLists.txt                                       | CMake              |          7 |          0 |          1 |          8 |
+| /home/mike/code/weatherKit/dev/.devcontainer/Dockerfile                         | Docker             |          8 |          0 |          5 |         13 |
+| /home/mike/code/weatherKit/dev/.devcontainer/devcontainer.json                  | JSON with Comments |         21 |          0 |          0 |         21 |
+| /home/mike/code/weatherKit/dev/CMakeLists.txt                                   | CMake              |          7 |          0 |          1 |          8 |
+| /home/mike/code/weatherKit/dev/README.md                                        | Markdown           |         22 |          0 |         11 |         33 |
+| /home/mike/code/weatherKit/dev/main/CMakeLists.txt                              | CMake              |         24 |          0 |          0 |         24 |
+| /home/mike/code/weatherKit/dev/main/idf_component.yml                           | YAML               |          2 |          0 |          1 |          3 |
+| /home/mike/code/weatherKit/dev/main/include/drivers/buttons.h                   | C++                |         22 |         19 |          8 |         49 |
+| /home/mike/code/weatherKit/dev/main/include/drivers/display.h                   | C++                |         15 |         29 |         12 |         56 |
+| /home/mike/code/weatherKit/dev/main/include/drivers/lora.h                      | C++                |         82 |        220 |         56 |        358 |
+| /home/mike/code/weatherKit/dev/main/include/drivers/lora_protocol.h             | C++                |        224 |        204 |         67 |        495 |
+| /home/mike/code/weatherKit/dev/main/include/pinout.h                            | C++                |         24 |         27 |         10 |         61 |
+| /home/mike/code/weatherKit/dev/main/include/tasks/config_tx_task.h              | C++                |         13 |         30 |         11 |         54 |
+| /home/mike/code/weatherKit/dev/main/include/tasks/lora_rx_task.h                | C++                |          6 |         11 |          6 |         23 |
+| /home/mike/code/weatherKit/dev/main/include/tasks/task_common.h                 | C++                |         39 |         63 |         22 |        124 |
+| /home/mike/code/weatherKit/dev/main/include/tasks/ui_task.h                     | C++                |          6 |         11 |          6 |         23 |
+| /home/mike/code/weatherKit/dev/main/include/tasks/weather_ack_task.h            | C++                |          9 |         21 |          8 |         38 |
+| /home/mike/code/weatherKit/dev/main/include/ui/ui.h                             | C++                |         74 |         98 |         33 |        205 |
+| /home/mike/code/weatherKit/dev/main/include/ui/ui_common.h                      | C++                |         23 |         42 |         17 |         82 |
+| /home/mike/code/weatherKit/dev/main/include/ui/ui_info.h                        | C++                |          6 |          8 |          5 |         19 |
+| /home/mike/code/weatherKit/dev/main/include/ui/ui_pages.h                       | C++                |         11 |         24 |         10 |         45 |
+| /home/mike/code/weatherKit/dev/main/include/weather/storm_tracker.h             | C++                |         29 |         36 |         12 |         77 |
+| /home/mike/code/weatherKit/dev/main/include/weather/weather_calc.h              | C++                |         18 |         38 |         11 |         67 |
+| /home/mike/code/weatherKit/dev/main/src/drivers/buttons.c                       | C                  |        152 |         31 |         29 |        212 |
+| /home/mike/code/weatherKit/dev/main/src/drivers/buttons_new.c                   | C                  |        193 |         56 |         41 |        290 |
+| /home/mike/code/weatherKit/dev/main/src/drivers/display.c                       | C                  |        155 |         34 |         49 |        238 |
+| /home/mike/code/weatherKit/dev/main/src/drivers/lora.c                          | C                  |        871 |        171 |        219 |      1,261 |
+| /home/mike/code/weatherKit/dev/main/src/main.c                                  | C                  |        114 |         40 |         24 |        178 |
+| /home/mike/code/weatherKit/dev/main/src/tasks/config_tx_task.c                  | C                  |        127 |         24 |         33 |        184 |
+| /home/mike/code/weatherKit/dev/main/src/tasks/lora_rx_task.c                    | C                  |        158 |         51 |         46 |        255 |
+| /home/mike/code/weatherKit/dev/main/src/tasks/task_common.c                     | C                  |         81 |         23 |         23 |        127 |
+| /home/mike/code/weatherKit/dev/main/src/tasks/ui_task.c                         | C                  |         32 |         13 |          9 |         54 |
+| /home/mike/code/weatherKit/dev/main/src/tasks/weather_ack_task.c                | C                  |        102 |         28 |         27 |        157 |
+| /home/mike/code/weatherKit/dev/main/src/ui/ui.c                                 | C                  |        538 |         81 |         79 |        698 |
+| /home/mike/code/weatherKit/dev/main/src/ui/ui_info.c                            | C                  |        172 |         27 |         55 |        254 |
+| /home/mike/code/weatherKit/dev/main/src/ui/ui_pages.c                           | C                  |        328 |         71 |         65 |        464 |
+| /home/mike/code/weatherKit/dev/main/src/weather/storm_tracker.c                 | C                  |        188 |         23 |         51 |        262 |
+| /home/mike/code/weatherKit/dev/main/src/weather/weather_calc.c                  | C                  |         61 |         10 |         16 |         87 |
+| /home/mike/code/weatherKit/docs/SOFTWARE_ARCHITECTURE.md                        | Markdown           |        576 |          0 |        207 |        783 |
+| /home/mike/code/weatherKit/sensorPackage/.devcontainer/Dockerfile               | Docker             |          8 |          0 |          5 |         13 |
+| /home/mike/code/weatherKit/sensorPackage/.devcontainer/devcontainer.json        | JSON with Comments |         21 |          0 |          0 |         21 |
+| /home/mike/code/weatherKit/sensorPackage/CMakeLists.txt                         | CMake              |          7 |          0 |          1 |          8 |
+| /home/mike/code/weatherKit/sensorPackage/README.md                              | Markdown           |         22 |          0 |         11 |         33 |
+| /home/mike/code/weatherKit/sensorPackage/esp_idf_project_configuration.json     | JSON               |         26 |          0 |          1 |         27 |
+| /home/mike/code/weatherKit/sensorPackage/idf_component.yml                      | YAML               |          3 |          0 |          2 |          5 |
+| /home/mike/code/weatherKit/sensorPackage/main/CMakeLists.txt                    | CMake              |         21 |          0 |          1 |         22 |
+| /home/mike/code/weatherKit/sensorPackage/main/idf_component.yml                 | YAML               |          2 |          0 |          2 |          4 |
+| /home/mike/code/weatherKit/sensorPackage/main/include/drivers/aht20.h           | C++                |         10 |          7 |          4 |         21 |
+| /home/mike/code/weatherKit/sensorPackage/main/include/drivers/as3935.h          | C++                |         42 |         85 |         19 |        146 |
+| /home/mike/code/weatherKit/sensorPackage/main/include/drivers/buzzer.h          | C++                |         10 |         27 |          9 |         46 |
+| /home/mike/code/weatherKit/sensorPackage/main/include/drivers/i2c_init.h        | C++                |         10 |         26 |          9 |         45 |
+| /home/mike/code/weatherKit/sensorPackage/main/include/drivers/led.h             | C++                |          9 |         19 |          7 |         35 |
+| /home/mike/code/weatherKit/sensorPackage/main/include/drivers/lora.h            | C++                |         74 |        194 |         51 |        319 |
+| /home/mike/code/weatherKit/sensorPackage/main/include/drivers/lora_protocol.h   | C++                |        224 |        205 |         67 |        496 |
+| /home/mike/code/weatherKit/sensorPackage/main/include/drivers/pressure_driver.h | C++                |         16 |         46 |         10 |         72 |
+| /home/mike/code/weatherKit/sensorPackage/main/include/pinout.h                  | C++                |         27 |         52 |         17 |         96 |
+| /home/mike/code/weatherKit/sensorPackage/main/include/sensor_routine.h          | C++                |         15 |         57 |         13 |         85 |
+| /home/mike/code/weatherKit/sensorPackage/main/include/tasks/led_status_task.h   | C++                |          8 |         12 |          6 |         26 |
+| /home/mike/code/weatherKit/sensorPackage/main/include/tasks/lora_rx_task.h      | C++                |          8 |         14 |          6 |         28 |
+| /home/mike/code/weatherKit/sensorPackage/main/include/tasks/task_common.h       | C++                |         47 |         90 |         32 |        169 |
+| /home/mike/code/weatherKit/sensorPackage/main/include/tasks/weather_tx_task.h   | C++                |          8 |         14 |          6 |         28 |
+| /home/mike/code/weatherKit/sensorPackage/main/main.c                            | C                  |         50 |         25 |         13 |         88 |
+| /home/mike/code/weatherKit/sensorPackage/main/src/drivers/aht20.c               | C                  |         87 |         14 |         30 |        131 |
+| /home/mike/code/weatherKit/sensorPackage/main/src/drivers/as3935.c              | C                  |        281 |         41 |         74 |        396 |
+| /home/mike/code/weatherKit/sensorPackage/main/src/drivers/buzzer.c              | C                  |        131 |         16 |         26 |        173 |
+| /home/mike/code/weatherKit/sensorPackage/main/src/drivers/i2c_init.c            | C                  |         69 |          7 |         20 |         96 |
+| /home/mike/code/weatherKit/sensorPackage/main/src/drivers/led.c                 | C                  |        171 |         16 |         35 |        222 |
+| /home/mike/code/weatherKit/sensorPackage/main/src/drivers/lora.c                | C                  |        745 |        169 |        206 |      1,120 |
+| /home/mike/code/weatherKit/sensorPackage/main/src/drivers/pressure_driver.c     | C                  |        129 |         46 |         45 |        220 |
+| /home/mike/code/weatherKit/sensorPackage/main/src/main.c                        | C                  |         44 |         22 |         12 |         78 |
+| /home/mike/code/weatherKit/sensorPackage/main/src/sensor_routine.c              | C                  |        470 |        172 |        130 |        772 |
+| /home/mike/code/weatherKit/sensorPackage/main/src/tasks/led_status_task.c       | C                  |         87 |         22 |         20 |        129 |
+| /home/mike/code/weatherKit/sensorPackage/main/src/tasks/lora_rx_task.c          | C                  |        144 |         45 |         39 |        228 |
+| /home/mike/code/weatherKit/sensorPackage/main/src/tasks/sensor_routine.c        | C                  |        167 |         24 |         43 |        234 |
+| /home/mike/code/weatherKit/sensorPackage/main/src/tasks/task_common.c           | C                  |        161 |         35 |         44 |        240 |
+| /home/mike/code/weatherKit/sensorPackage/main/src/tasks/weather_tx_task.c       | C                  |        188 |         44 |         48 |        280 |
+| Total                                                                           |                    |      8,082 |      3,110 |      2,350 |     13,542 |
++---------------------------------------------------------------------------------+--------------------+------------+------------+------------+------------+

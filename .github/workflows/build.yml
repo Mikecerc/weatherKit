@@ -1,0 +1,83 @@
+name: Build WeatherKit
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  build-sensor-package:
+    name: Build Sensor Package
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Setup ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32s3
+          path: sensorPackage
+
+      - name: Upload Sensor Package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sensorPackage-firmware
+          path: |
+            sensorPackage/build/sensorPackage.bin
+            sensorPackage/build/bootloader/bootloader.bin
+            sensorPackage/build/partition_table/partition-table.bin
+          retention-days: 30
+
+  build-base-station:
+    name: Build Base Station
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+
+      - name: Setup ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32s3
+          path: baseStation
+
+      - name: Upload Base Station artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: baseStation-firmware
+          path: |
+            baseStation/build/baseStation.bin
+            baseStation/build/bootloader/bootloader.bin
+            baseStation/build/partition_table/partition-table.bin
+          retention-days: 30
+
+  build-status:
+    name: Update Build Status
+    needs: [build-sensor-package, build-base-station]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Check build results
+        run: |
+          echo "Sensor Package: ${{ needs.build-sensor-package.result }}"
+          echo "Base Station: ${{ needs.build-base-station.result }}"
+          
+          if [ "${{ needs.build-sensor-package.result }}" == "success" ] && [ "${{ needs.build-base-station.result }}" == "success" ]; then
+            echo "✅ All builds passed!"
+            exit 0
+          else
+            echo "❌ Some builds failed"
+            exit 1
+          fi

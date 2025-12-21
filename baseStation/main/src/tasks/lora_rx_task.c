@@ -232,7 +232,7 @@ void lora_rx_task(void *pvParameters)
                      (unsigned long)task_get_sensor_elapsed_ms());
         }
         
-        // Delay to allow other tasks (including IDLE) to run
+        // Delay to allo file containing your project source filw other tasks (including IDLE) to run
         // 10ms is plenty fast for LoRa polling (packets take ~100ms+ to transmit)
         vTaskDelay(pdMS_TO_TICKS(10));
     }

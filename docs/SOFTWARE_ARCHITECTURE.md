@@ -3,6 +3,19 @@
 This document provides in-depth software architecture flowcharts for both the Base Station (dev) and Sensor Package (sensorPackage) microcontrollers.
 
 ---
+## Base Station Task Summary
+
+The Base Station runs five concurrent FreeRTOS tasks that work together to receive, process, and display weather data. The **LoRa RX Task** continuously listens for incoming packets from the sensor and dispatches them to appropriate handlers—when a weather packet arrives, it queues the data for the **UI Task** to display and notifies the **Weather ACK Task** to send an acknowledgment. The **Weather ACK Task** manages the three-way handshake by sending ACKs and retrying if the sensor doesn't confirm receipt. The **Config TX Task** monitors for user-initiated configuration changes (from the settings menu) and transmits them to the sensor. The **UI Task** receives weather data via a FreeRTOS queue, updates the OLED display, and handles periodic screen refreshes. Finally, the **Button Task** polls the two physical buttons, debounces presses, detects short/long presses, and triggers UI navigation callbacks. All tasks coordinate through shared mutexes (for LoRa radio access and weather state) and queues (for passing weather data and ACK requests).
+
+## Sensor Package Task Summary
+
+The Sensor Package runs three concurrent FreeRTOS tasks focused on data collection and transmission. The **Weather TX Task** is the primary workhorse: it periodically reads temperature/humidity from the AHT20 sensor and pressure from the HX710B, packages the data with lightning statistics and current configuration, then transmits it via LoRa. After sending, it briefly yields to allow the **LoRa RX Task** to capture the base station's acknowledgment. The **LoRa RX Task** listens for incoming CONFIG and WEATHER_ACK packets; when an ACK arrives, it clears the pending lightning data and sends an ACK-ACK to complete the handshake, and when a CONFIG packet arrives, it updates the sensor's operating parameters (interval, power mode) and persists them to NVS flash. The **LED Status Task** provides visual feedback—solid green/blue indicates LoRa connectivity (green for real sensors, blue for fake data mode), brief flashes indicate packet sent/received/failed events, and flashing red indicates LoRa offline. All tasks share access to the LoRa radio through a mutex and communicate configuration changes through a protected global config structure.
+
+## LoRa Protocol Summary
+
+The WeatherKit uses a custom LoRa protocol operating at 433 MHz with a three-way handshake to ensure reliable data delivery. Communication begins when the sensor transmits a **WEATHER** packet containing encoded temperature, humidity, pressure, lightning data (strike count, distances, total), current configuration echo, RSSI feedback, and uptime. Upon receipt, the base station caches any new lightning strikes as "pending" and responds with a **WEATHER_ACK** packet containing the received RSSI (for adaptive power) and the acknowledged sequence number. When the sensor receives this ACK, it clears its pending lightning counts (preventing double-counting) and sends a **WEATHER_ACK_ACK** to confirm the data was committed. Only upon receiving this final confirmation does the base station record the lightning strikes to the storm tracker. This ensures lightning events are never lost or duplicated even if packets are dropped. Configuration changes flow in the opposite direction: the base sends a **CONFIG** packet with update interval, TX power, and flags (adaptive power, high power mode, locate buzzer), and the sensor responds with **CONFIG_ACK** echoing the applied settings. The protocol uses sequence numbers to detect duplicates, and the base station implements retry logic with exponential backoff if ACK-ACK is not received within timeout.
+
+---
 
 ## System Overview
 
