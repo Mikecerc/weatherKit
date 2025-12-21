@@ -61,23 +61,3 @@ jobs:
             baseStation/build/bootloader/bootloader.bin
             baseStation/build/partition_table/partition-table.bin
           retention-days: 30
-
-  build-status:
-    name: Update Build Status
-    needs: [build-sensor-package, build-base-station]
-    runs-on: ubuntu-latest
-    if: always()
-    
-    steps:
-      - name: Check build results
-        run: |
-          echo "Sensor Package: ${{ needs.build-sensor-package.result }}"
-          echo "Base Station: ${{ needs.build-base-station.result }}"
-          
-          if [ "${{ needs.build-sensor-package.result }}" == "success" ] && [ "${{ needs.build-base-station.result }}" == "success" ]; then
-            echo "✅ All builds passed!"
-            exit 0
-          else
-            echo "❌ Some builds failed"
-            exit 1
-          fi

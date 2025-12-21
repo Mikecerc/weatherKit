@@ -9,11 +9,6 @@
   <img src="https://img.shields.io/badge/Battery-18650-red" alt="18650 Battery">
 </p>
 
-| Project | Build Status |
-|---------|--------------|
-| **Sensor Package** | [![Sensor Package](https://github.com/Mikecerc/weatherKit/actions/workflows/build.yml/badge.svg?branch=master)](https://github.com/Mikecerc/weatherKit/actions/workflows/build.yml) |
-| **Base Station** | [![Base Station](https://github.com/Mikecerc/weatherKit/actions/workflows/build.yml/badge.svg?branch=master)](https://github.com/Mikecerc/weatherKit/actions/workflows/build.yml) |
-
 A two-unit, portable, battery-powered weather station system designed for **off-grid outdoor use**. Built on ESP32-S3 microcontrollers with LoRa-based long-range communication, real-time weather monitoring, lightning detection, and storm tracking capabilities. Perfect for hikers, campers, survivalists, and anyone who needs reliable weather awareness in remote locations.
 
 ## � Project Scope
